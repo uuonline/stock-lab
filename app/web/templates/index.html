@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>StockLab · 股票研究系统</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">📈</span>
+    <span class="title">StockLab</span>
+    <span class="market-status" id="marketStatus">加载中…</span>
+  </div>
+  <div class="topbar-right">
+    <span class="clock" id="clock"></span>
+    <button class="icon-btn" id="refreshBtn" title="刷新当前页">⟳</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-view="dashboard">总览</button>
+  <button class="tab" data-view="watchlist">自选</button>
+  <button class="tab" data-view="detail">个股</button>
+  <button class="tab" data-view="screener">选股</button>
+  <button class="tab" data-view="backtest">回测</button>
+  <button class="tab" data-view="alerts">提醒</button>
+  <button class="tab" data-view="settings">设置</button>
+</nav>
+
+<main id="main">
+
+  <!-- ========== 总览 ========== -->
+  <section class="view active" id="view-dashboard">
+    <div class="indices" id="indices"></div>
+    <div class="grid-2">
+      <div class="card">
+        <h3>市场情绪</h3>
+        <div id="breadth" class="breadth">加载中…</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>大盘综述</h3>
+          <button class="mini-btn" data-action="market-report">生成</button>
+        </div>
+        <div id="marketReport" class="report-box muted">点击「生成」查看市场综述</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>排行榜</h3>
+        <div class="seg" id="moverSeg">
+          <button class="seg-btn active" data-kind="up">涨幅榜</button>
+          <button class="seg-btn" data-kind="down">跌幅榜</button>
+          <button class="seg-btn" data-kind="amount">成交额</button>
+          <button class="seg-btn" data-kind="turnover">换手率</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="moverTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ========== 自选 ========== -->
+  <section class="view" id="view-watchlist">
+    <div class="card">
+      <div class="card-head">
+        <h3>自选股</h3>
+        <div class="row-actions">
+          <select id="groupSelect"></select>
+          <label class="chk"><input type="checkbox" id="withTech"> 技术评分</label>
+          <label class="chk"><input type="checkbox" id="autoRefresh" checked> 自动刷新</label>
+        </div>
+      </div>
+      <div class="add-row">
+        <input id="watchInput" placeholder="输入代码或名称，如 600519 / 茅台 / 00700" autocomplete="off">
+        <button class="btn primary" id="watchAddBtn">添加</button>
+      </div>
+      <div id="watchSuggest" class="suggest"></div>
+      <div class="table-wrap"><table id="watchTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ========== 个股 ========== -->
+  <section class="view" id="view-detail">
+    <div class="card">
+      <div class="add-row">
+        <input id="detailInput" placeholder="输入代码或名称后回车，如 600519.SH" autocomplete="off">
+        <button class="btn primary" id="detailGoBtn">查询</button>
+      </div>
+      <div id="detailSuggest" class="suggest"></div>
+    </div>
+    <div id="detailBody" class="hidden">
+      <div class="card quote-card" id="detailQuote"></div>
+      <div class="card">
+        <div class="card-head">
+          <h3>K线图</h3>
+          <div class="row-actions">
+            <div class="seg" id="periodSeg">
+              <button class="seg-btn active" data-period="trend">分时</button>
+              <button class="seg-btn" data-period="5m">5分</button>
+              <button class="seg-btn" data-period="30m">30分</button>
+              <button class="seg-btn" data-period="60m">60分</button>
+              <button class="seg-btn" data-period="day">日K</button>
+              <button class="seg-btn" data-period="week">周K</button>
+              <button class="seg-btn" data-period="month">月K</button>
+            </div>
+            <div class="seg" id="subSeg">
+              <button class="seg-btn active" data-sub="macd">MACD</button>
+              <button class="seg-btn" data-sub="kdj">KDJ</button>
+              <button class="seg-btn" data-sub="rsi">RSI</button>
+            </div>
+          </div>
+        </div>
+        <div id="klineChart" class="chart"></div>
+      </div>
+      <div class="grid-2">
+        <div class="card"><h3>技术指标</h3><div id="techPanel"></div></div>
+        <div class="card"><h3>基本面财务</h3><div id="fundPanel"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>AI 研究简报</h3>
+          <button class="btn primary" id="aiReportBtn">生成简报</button>
+        </div>
+        <div id="aiReport" class="report-box muted">点击「生成简报」开始分析</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 选股 ========== -->
+  <section class="view" id="view-screener">
+    <div class="card">
+      <h3>预设方案</h3>
+      <div id="presetList" class="preset-list"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>自定义条件</h3>
+        <button class="mini-btn" id="addCondBtn">+ 添加条件</button>
+      </div>
+      <div id="condList"></div>
+      <div class="tech-pick" id="techPick"></div>
+      <div class="row-actions mt">
+        <label class="chk"><input type="checkbox" id="excludeST" checked> 排除 ST</label>
+        <label class="chk"><input type="checkbox" id="excludeNew" checked> 排除次新</label>
+        <select id="orderSelect">
+          <option value="amount DESC">按成交额</option>
+          <option value="pct_change DESC">按涨幅</option>
+          <option value="turnover_rate DESC">按换手率</option>
+          <option value="market_cap DESC">按市值</option>
+          <option value="pe ASC">按 PE 升序</option>
+        </select>
+        <button class="btn primary" id="runScreenBtn">开始选股</button>
+        <button class="btn" id="saveScreenBtn">保存方案</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>选股结果 <span id="screenMeta" class="muted"></span></h3>
+      <div id="screenWarn" class="hidden"></div>
+      <div class="table-wrap"><table id="screenTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ========== 回测 ========== -->
+  <section class="view" id="view-backtest">
+    <div class="card">
+      <h3>回测设置</h3>
+      <div class="form-grid">
+        <label>标的 <input id="btSymbol" value="600519.SH" placeholder="600519.SH"></label>
+        <label>策略 <select id="btStrategy"></select></label>
+        <label>初始资金 <input id="btCash" type="number" value="100000" min="1000" step="10000"></label>
+        <label>回测天数 <input id="btDays" type="number" value="500" min="60" max="3000" step="50"></label>
+        <label>仓位比例 <input id="btPos" type="number" value="1" min="0.1" max="1" step="0.1"></label>
+        <label class="chk-wrap"><input type="checkbox" id="btFractional"> 允许零股</label>
+        <label class="chk-wrap"><input type="checkbox" id="btCompare" checked> 对比全部策略</label>
+      </div>
+      <div id="btParams" class="params-box"></div>
+      <div class="row-actions mt"><button class="btn primary" id="runBtBtn">开始回测</button></div>
+    </div>
+    <div id="btResult" class="hidden">
+      <div class="card"><h3>策略表现</h3><div id="btMetrics" class="metrics"></div></div>
+      <div class="card"><h3>资金曲线</h3><div id="btChart" class="chart"></div></div>
+      <div class="card"><h3>策略对比</h3><div class="table-wrap"><table id="btCompareTable"></table></div></div>
+      <div class="card"><h3>交易明细</h3><div class="table-wrap"><table id="btTrades"></table></div></div>
+    </div>
+  </section>
+
+  <!-- ========== 提醒 ========== -->
+  <section class="view" id="view-alerts">
+    <div class="card">
+      <h3>新增提醒</h3>
+      <div class="form-grid">
+        <label>标的 <input id="alSymbol" placeholder="600519.SH"></label>
+        <label>规则 <select id="alRule"></select></label>
+        <label>阈值 <input id="alValue" type="number" step="0.01" placeholder="如 1300"></label>
+        <label>冷却(秒) <input id="alCooldown" type="number" value="1800" min="0"></label>
+        <label>备注 <input id="alMessage" placeholder="可选"></label>
+      </div>
+      <div class="row-actions mt">
+        <button class="btn primary" id="addAlertBtn">添加提醒</button>
+        <button class="btn" id="testNotifyBtn">测试推送</button>
+        <button class="btn" id="checkAlertBtn">立即巡检</button>
+      </div>
+      <div id="notifyStatus" class="muted mt-sm"></div>
+    </div>
+    <div class="card">
+      <h3>提醒规则</h3>
+      <div class="table-wrap"><table id="alertTable"></table></div>
+    </div>
+    <div class="card">
+      <h3>触发历史</h3>
+      <div class="table-wrap"><table id="eventTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ========== 设置 ========== -->
+  <section class="view" id="view-settings">
+    <div class="card">
+      <div class="card-head">
+        <h3>部署自检</h3>
+        <button class="btn primary" id="selftestBtn">运行自检</button>
+      </div>
+      <p class="muted mt-sm">逐项验证数据源连通性、数据库、指标数学、回测引擎、调度器。
+        换到 NAS 后建议先跑一次 —— NAS 的网络环境和本机可能不同。</p>
+      <div id="selftestResult" class="mt"></div>
+    </div>
+    <div class="card"><h3>系统状态</h3><div id="sysStatus">加载中…</div></div>
+    <div class="card">
+      <h3>维护操作</h3>
+      <div class="row-actions">
+        <button class="btn" data-task="snapshot">刷新全市场快照</button>
+        <button class="btn" data-task="sync_kline">同步自选股K线</button>
+        <button class="btn" data-task="alerts">执行提醒巡检</button>
+        <button class="btn" data-task="cleanup">清理缓存</button>
+      </div>
+      <p class="muted mt-sm">首次使用请先点「刷新全市场快照」，选股与搜索功能依赖该数据（约需 1-3 分钟）。</p>
+    </div>
+    <div class="card"><h3>任务日志</h3><div class="table-wrap"><table id="taskTable"></table></div></div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast"></div>
+<div id="loading" class="loading hidden"><div class="spinner"></div><span id="loadingText">加载中…</span></div>
+
+<script src="/static/js/echarts.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

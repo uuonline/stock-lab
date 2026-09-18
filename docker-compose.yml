@@ -1,0 +1,107 @@
+# StockLab · 群晖 NAS 部署编排
+#
+# 用法（DSM 7.x / Container Manager）：
+#   1. 把整个 stock-lab 目录放到  /volume1/docker/stock-lab
+#   2. cp .env.example .env 并按需修改
+#   3. 在 Container Manager → 项目 → 新增，选择该目录（它会自动识别本文件）
+#      或者 SSH 进去执行： sudo docker compose up -d --build
+#
+# 若容器内写数据报权限错误，在 NAS 上执行一次即可：
+#   sudo chown -R 1026:100 /volume1/docker/stock-lab/data     # 1026 换成你的 DSM 用户名 uid
+
+services:
+  stocklab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 国内网络保持默认；能直连 pypi 时改为 https://pypi.org/simple
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-mirrors.aliyun.com}
+    image: stocklab:1.0.0
+    container_name: stocklab
+    restart: unless-stopped
+
+    ports:
+      # 左边是 NAS 上对外端口，冲突就改成 8788:8787
+      - "${SL_HOST_PORT:-8787}:8787"
+
+    volumes:
+      # 数据全部落在 NAS 磁盘上，删容器不丢数据
+      - ./data:/data
+      # 时区文件，保证定时任务时间准确
+      - /etc/localtime:/etc/localtime:ro
+
+    environment:
+      TZ: Asia/Shanghai
+      SL_DATA_DIR: /data
+      SL_HOST: 0.0.0.0
+      SL_PORT: "8787"
+
+      # ---- 访问令牌：公网/多用户环境务必设置，局域网可留空 ----
+      SL_ACCESS_TOKEN: ${SL_ACCESS_TOKEN:-}
+
+      # ---- 数据源 ----
+      # 腾讯/新浪实测 ~100% 成功，东财 push2 仅 ~42%，故腾讯优先
+      SL_SOURCE_ORDER: ${SL_SOURCE_ORDER:-tencent,eastmoney,sina,alphavantage}
+      SL_ENRICH_SOURCES: ${SL_ENRICH_SOURCES:-eastmoney}
+      SL_ENRICH_RETRIES: "${SL_ENRICH_RETRIES:-1}"
+      SL_ENRICH_BUDGET: "${SL_ENRICH_BUDGET:-1.5}"
+      SL_HTTP_TIMEOUT: "${SL_HTTP_TIMEOUT:-12}"
+      SL_HTTP_RETRIES: "${SL_HTTP_RETRIES:-4}"
+      SL_HTTP_BACKOFF: "${SL_HTTP_BACKOFF:-0.6}"
+      SL_MIN_REQUEST_INTERVAL: "${SL_MIN_REQUEST_INTERVAL:-0.18}"
+
+      # ---- 调度 ----
+      SL_SCHEDULER_ENABLED: "${SL_SCHEDULER_ENABLED:-1}"
+      SL_EOD_TIMES: ${SL_EOD_TIMES:-15:30,18:00}
+      SL_INTRADAY_INTERVAL: "${SL_INTRADAY_INTERVAL:-60}"
+      SL_QUOTE_CACHE_TTL: "${SL_QUOTE_CACHE_TTL:-5}"
+      SL_KLINE_CACHE_TTL: "${SL_KLINE_CACHE_TTL:-900}"
+      SL_SNAPSHOT_CACHE_TTL: "${SL_SNAPSHOT_CACHE_TTL:-60}"
+
+      # ---- Alpha Vantage（可选，A股/美股备用源）----
+      # 实测：支持美股行情/日线/财务，A股行情/日线；不支持港股与A股财务。
+      # 一次请求只能查一只、额度很紧，默认排在源顺序末位做兜底。
+      SL_ALPHAVANTAGE_KEY: ${SL_ALPHAVANTAGE_KEY:-}
+      SL_ALPHAVANTAGE_DAILY_LIMIT: "${SL_ALPHAVANTAGE_DAILY_LIMIT:-25}"
+      SL_ALPHAVANTAGE_QUOTE_TTL: "${SL_ALPHAVANTAGE_QUOTE_TTL:-300}"
+      SL_ALPHAVANTAGE_KLINE_TTL: "${SL_ALPHAVANTAGE_KLINE_TTL:-21600}"
+      SL_ALPHAVANTAGE_MIN_INTERVAL: "${SL_ALPHAVANTAGE_MIN_INTERVAL:-1.2}"
+      SL_ALPHAVANTAGE_BURST_WAIT: "${SL_ALPHAVANTAGE_BURST_WAIT:-3.0}"
+
+      # ---- AI 简报（可选，不填则用本地规则引擎）----
+      SL_AI_ENABLED: "${SL_AI_ENABLED:-0}"
+      SL_AI_BASE_URL: ${SL_AI_BASE_URL:-https://api.deepseek.com/v1}
+      SL_AI_API_KEY: ${SL_AI_API_KEY:-}
+      SL_AI_MODEL: ${SL_AI_MODEL:-deepseek-chat}
+      SL_AI_TIMEOUT: "${SL_AI_TIMEOUT:-120}"
+
+      # ---- 消息推送（可选，留空即禁用）----
+      SL_NOTIFY_WECOM: ${SL_NOTIFY_WECOM:-}
+      SL_NOTIFY_TG_TOKEN: ${SL_NOTIFY_TG_TOKEN:-}
+      SL_NOTIFY_TG_CHAT: ${SL_NOTIFY_TG_CHAT:-}
+      SL_NOTIFY_SERVERCHAN: ${SL_NOTIFY_SERVERCHAN:-}
+      SL_NOTIFY_BARK: ${SL_NOTIFY_BARK:-}
+      SL_NOTIFY_WEBHOOK: ${SL_NOTIFY_WEBHOOK:-}
+
+      # ---- 回测默认成本 ----
+      SL_COMMISSION: "${SL_COMMISSION:-0.00025}"
+      SL_STAMP_TAX: "${SL_STAMP_TAX:-0.0005}"
+      SL_SLIPPAGE: "${SL_SLIPPAGE:-0.0005}"
+      SL_INITIAL_CASH: "${SL_INITIAL_CASH:-100000}"
+
+      SL_DEBUG: "${SL_DEBUG:-0}"
+
+    # 资源限制（按 NAS 性能调整；本项目很轻，512M 足够）
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    mem_limit: 768m
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

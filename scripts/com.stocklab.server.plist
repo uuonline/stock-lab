@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  StockLab 开机自启 / 常驻守护配置（macOS launchd）
+
+  为什么需要它：
+    直接在终端里跑 `python -m uvicorn ...` 或 `nohup ... &`，进程会随终端
+    会话结束被系统回收 —— 表现就是"页面突然打不开了"。
+    launchd 由系统托管，终端关掉、崩溃退出都会自动拉起，开机也会自启。
+
+  安装（二选一）：
+
+  【A】装到用户级 LaunchAgents（推荐，开机会自动运行）
+      cp scripts/com.stocklab.server.plist ~/Library/LaunchAgents/
+      launchctl load  ~/Library/LaunchAgents/com.stocklab.server.plist
+      launchctl start com.stocklab.server
+
+  【B】从项目内临时加载（重启 Mac 后失效，需要重新 load）
+      launchctl load  scripts/com.stocklab.server.plist
+      launchctl start com.stocklab.server
+
+  查看状态：
+      launchctl list | grep stocklab
+      curl -s http://127.0.0.1:8787/api/health
+
+  停止 / 卸载：
+      launchctl stop   com.stocklab.server
+      launchctl unload ~/Library/LaunchAgents/com.stocklab.server.plist
+
+  注意：下面的路径是按实际部署路径填写。换机器请改 ProgramArguments
+        与 WorkingDirectory 里的绝对路径。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stocklab.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/stock-lab/.venv/bin/python</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>app.main:app</string>
+    <string>--host</string>
+    <string>0.0.0.0</string>
+    <string>--port</string>
+    <string>8787</string>
+    <string>--no-access-log</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/path/to/stock-lab</string>
+
+  <!-- 登录/加载即启动 -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- 进程退出后自动重启（崩溃、被误杀都能拉起来） -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- 避免疯狂重启：两次启动至少间隔 10 秒 -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/path/to/stock-lab/data/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/path/to/stock-lab/data/logs/launchd.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>LANG</key>
+    <string>zh_CN.UTF-8</string>
+  </dict>
+</dict>
+</plist>

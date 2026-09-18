@@ -1,0 +1,250 @@
+/* StockLab · 深色金融主题 */
+:root{
+  --bg:#0d1117; --bg2:#161b22; --bg3:#1c2129; --border:#2a3038;
+  --fg:#e6edf3; --fg2:#9aa4b2; --fg3:#6b7280;
+  --up:#f0454b; --down:#26a269; --flat:#8b949e;
+  --accent:#3b82f6; --accent2:#1d4ed8; --warn:#d29922;
+  --radius:10px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+h3{margin:0 0 12px;font-size:15px;font-weight:600;display:inline-block}
+a{color:var(--accent);text-decoration:none}
+.muted{color:var(--fg2)}
+.hidden{display:none !important}
+.mt{margin-top:12px}.mt-sm{margin-top:6px}
+
+/* 顶栏 */
+.topbar{
+  position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;
+  padding:10px 16px;background:var(--bg2);border-bottom:1px solid var(--border);
+  padding-top:calc(10px + env(safe-area-inset-top));
+}
+.brand{display:flex;align-items:center;gap:8px}
+.logo{font-size:18px}
+.title{font-weight:700;font-size:16px;letter-spacing:.3px}
+.market-status{font-size:12px;padding:2px 8px;border-radius:20px;background:var(--bg3);color:var(--fg2);white-space:nowrap}
+.market-status.open{background:rgba(240,69,75,.15);color:var(--up)}
+.market-status.closed{background:var(--bg3);color:var(--fg3)}
+.topbar-right{display:flex;align-items:center;gap:10px}
+.clock{font-size:12px;color:var(--fg2);font-variant-numeric:tabular-nums}
+.icon-btn{background:var(--bg3);border:1px solid var(--border);color:var(--fg);width:32px;height:32px;
+  border-radius:8px;cursor:pointer;font-size:16px;line-height:1}
+.icon-btn:active{background:var(--border)}
+
+/* 标签页 */
+.tabs{
+  display:flex;gap:4px;overflow-x:auto;padding:8px 12px;background:var(--bg2);
+  border-bottom:1px solid var(--border);position:sticky;top:52px;z-index:40;
+  scrollbar-width:none;
+}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  flex:0 0 auto;background:transparent;border:none;color:var(--fg2);
+  padding:7px 14px;border-radius:8px;cursor:pointer;font-size:14px;white-space:nowrap;
+}
+.tab.active{background:var(--accent);color:#fff;font-weight:600}
+.tab:not(.active):hover{background:var(--bg3);color:var(--fg)}
+
+main{padding:14px;max-width:1400px;margin:0 auto}
+.view{display:none}
+.view.active{display:block}
+
+/* 卡片 */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px;margin-bottom:14px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.card-head h3{margin:0}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:820px){.grid-2{grid-template-columns:1fr}}
+
+/* 指数卡片 */
+.indices{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.idx-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.idx-card .nm{font-size:12px;color:var(--fg2);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.idx-card .px{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+.idx-card .ch{font-size:12px;font-variant-numeric:tabular-nums}
+
+/* 涨跌色 */
+.up{color:var(--up)}.down{color:var(--down)}.flat{color:var(--flat)}
+.tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;background:var(--bg3);color:var(--fg2)}
+
+/* 表格 */
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--border)}
+th{color:var(--fg2);font-weight:500;font-size:12px;position:sticky;top:0;background:var(--bg2)}
+th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--bg2);z-index:1}
+tr:hover td{background:var(--bg3)}
+tr:hover td:first-child{background:var(--bg3)}
+td.num{font-variant-numeric:tabular-nums}
+.link{color:var(--accent);cursor:pointer}
+.link:hover{text-decoration:underline}
+.empty{text-align:center;color:var(--fg3);padding:26px 10px;font-size:13px}
+
+/* 按钮 */
+.btn{background:var(--bg3);border:1px solid var(--border);color:var(--fg);padding:8px 14px;
+  border-radius:8px;cursor:pointer;font-size:13px;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.btn.primary:hover{background:var(--accent2)}
+.btn.danger{color:var(--up)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.mini-btn{background:var(--bg3);border:1px solid var(--border);color:var(--fg2);
+  padding:3px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+.mini-btn:hover{color:var(--fg);border-color:var(--accent)}
+
+/* 分段控件 */
+.seg{display:inline-flex;background:var(--bg3);border-radius:8px;padding:2px;gap:2px}
+.seg-btn{background:transparent;border:none;color:var(--fg2);padding:5px 11px;border-radius:6px;
+  cursor:pointer;font-size:12px;white-space:nowrap}
+.seg-btn.active{background:var(--accent);color:#fff;font-weight:600}
+
+/* 表单 */
+input,select{
+  background:var(--bg3);border:1px solid var(--border);color:var(--fg);
+  padding:8px 10px;border-radius:8px;font-size:13px;font-family:inherit;outline:none;max-width:100%;
+}
+input:focus,select:focus{border-color:var(--accent)}
+.add-row{display:flex;gap:8px;margin-bottom:10px}
+.add-row input{flex:1;min-width:0}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin-bottom:12px}
+.form-grid label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--fg2)}
+.form-grid input,.form-grid select{width:100%}
+.chk-wrap{flex-direction:row !important;align-items:center;gap:8px !important;color:var(--fg) !important}
+.chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--fg2);cursor:pointer}
+.chk input{width:auto}
+.row-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* 搜索建议 */
+.suggest{position:relative;z-index:30}
+.suggest-item{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 12px;
+  margin-bottom:5px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.suggest-item:hover{border-color:var(--accent)}
+.suggest-item .s-name{font-weight:600}
+.suggest-item .s-code{color:var(--fg3);font-size:12px;margin-left:8px}
+
+/* 行情卡片 */
+.quote-card{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start}
+.q-main .q-name{font-size:17px;font-weight:700;margin-bottom:6px}
+.q-main .q-price{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.q-main .q-chg{font-size:14px;margin-top:4px;font-variant-numeric:tabular-nums}
+.q-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px 20px;flex:1;min-width:280px}
+.q-grid .qi{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;border-bottom:1px dotted var(--border);padding:3px 0}
+.q-grid .qi .k{color:var(--fg2)}
+.q-grid .qi .v{font-variant-numeric:tabular-nums;font-weight:500}
+
+/* 图表 */
+.chart{width:100%;height:460px}
+@media(max-width:820px){.chart{height:380px}}
+
+/* 指标面板 */
+.kv-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 18px}
+.kv{display:flex;justify-content:space-between;font-size:13px;border-bottom:1px dotted var(--border);padding:5px 0}
+.kv .k{color:var(--fg2)}
+.kv .v{font-variant-numeric:tabular-nums;font-weight:500}
+
+/* 信号标签 */
+.signals{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.sig{padding:3px 9px;border-radius:20px;font-size:12px}
+.sig.bull{background:rgba(240,69,75,.15);color:var(--up)}
+.sig.bear{background:rgba(38,162,105,.15);color:var(--down)}
+
+/* 评分条 */
+.rating-bar{display:flex;align-items:center;gap:10px;margin:8px 0 12px}
+.rating-bar .bar{flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;position:relative}
+.rating-bar .bar i{position:absolute;top:0;bottom:0;left:50%;background:var(--accent);border-radius:3px}
+.rating-bar .lbl{font-size:13px;font-weight:600}
+
+/* 报告 */
+.report-box{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;
+  font-size:13.5px;line-height:1.75;max-height:560px;overflow-y:auto;white-space:pre-wrap;word-break:break-word}
+.report-box h2{font-size:15px;margin:16px 0 8px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:5px}
+.report-box h2:first-child{margin-top:0}
+.report-box table{width:100%;margin:10px 0;white-space:normal}
+.report-box code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:12px}
+.report-box strong{color:#fff}
+
+/* 市场情绪 */
+.breadth{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px}
+.bi{text-align:center;background:var(--bg3);border-radius:8px;padding:12px 6px}
+.bi .n{font-size:21px;font-weight:700;font-variant-numeric:tabular-nums}
+.bi .l{font-size:11.5px;color:var(--fg2);margin-top:3px}
+
+/* 选股预设 */
+.preset-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.preset{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:11px 13px;cursor:pointer}
+.preset:hover{border-color:var(--accent)}
+.preset.active{border-color:var(--accent);background:rgba(59,130,246,.12)}
+.preset .p-name{font-weight:600;margin-bottom:4px}
+.preset .p-desc{font-size:12px;color:var(--fg2);line-height:1.5}
+
+/* 条件行 */
+.cond-row{display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap}
+.cond-row select,.cond-row input{flex:1;min-width:110px}
+.cond-row .del{background:transparent;border:none;color:var(--up);cursor:pointer;font-size:17px;padding:0 6px}
+
+/* 技术条件多选 */
+.tech-pick{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.tech-chip{padding:5px 11px;border-radius:20px;background:var(--bg3);border:1px solid var(--border);
+  cursor:pointer;font-size:12px;color:var(--fg2)}
+.tech-chip.active{background:rgba(59,130,246,.18);border-color:var(--accent);color:var(--accent)}
+
+/* 回测参数 */
+.params-box{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.params-box label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--fg2)}
+.params-box input{width:100%}
+
+/* 指标卡片 */
+.metrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.metric{background:var(--bg3);border-radius:8px;padding:11px 13px}
+.metric .m-l{font-size:11.5px;color:var(--fg2);margin-bottom:4px}
+.metric .m-v{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+
+/* 提示 */
+.toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(24px);
+  background:var(--bg3);border:1px solid var(--border);color:var(--fg);padding:11px 20px;
+  border-radius:9px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:200;
+  max-width:88vw;text-align:center;box-shadow:0 8px 26px rgba(0,0,0,.5)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.err{border-color:var(--up);color:var(--up)}
+.toast.ok{border-color:var(--down)}
+
+/* 加载遮罩 */
+.loading{position:fixed;inset:0;background:rgba(13,17,23,.82);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;z-index:300;font-size:13px;color:var(--fg2)}
+.spinner{width:34px;height:34px;border:3px solid var(--border);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .75s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 窄屏 */
+@media(max-width:600px){
+  main{padding:10px}
+  .card{padding:12px}
+  .q-main .q-price{font-size:28px}
+  th,td{padding:7px 8px}
+  .topbar{padding:9px 12px}
+  .quote-card{gap:14px}
+}
+
+/* 设置未生效的警示框（选股条件写错时提示，避免静默忽略） */
+.warn-box{background:rgba(210,153,34,.12);border:1px solid var(--warn);color:#e3b341;
+  border-radius:8px;padding:10px 13px;margin-bottom:12px;font-size:12.5px;line-height:1.7}
+
+/* 报告里的引用块（数据说明 / 免责声明 / 技术位警示） */
+.report-box blockquote{
+  margin:10px 0; padding:9px 14px; border-left:3px solid var(--accent);
+  background:rgba(59,130,246,.08); border-radius:0 6px 6px 0;
+  color:var(--fg2); font-size:13px; line-height:1.7;
+}
+.report-box ol{margin:8px 0; padding-left:22px}
+.report-box ol li{margin:4px 0}
+.report-box ul{margin:8px 0; padding-left:20px}
+.report-box ul li{margin:3px 0}
+.report-box hr{border:none;border-top:1px solid var(--border);margin:16px 0}
+.report-box table th{background:var(--bg2)}
