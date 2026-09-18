@@ -1,3 +1,65 @@
+## English Summary
+
+**StockLab** is an open-source, self-hosted stock research system for
+**A-share, Hong Kong, ETF and index** markets. It is designed to run on a
+personal NAS via Docker and is accessed through a browser (desktop and mobile).
+
+### Features
+
+- **Watchlist dashboard** — real-time quotes, intraday chart, candlestick
+  charts, technical indicators
+- **Fundamentals** — financial statements, valuation metrics, and a composite
+  scoring panel with an explainable breakdown
+- **Screener** — 6 built-in presets plus custom conditions (valuation, market
+  cap, turnover, and 15 technical conditions such as moving-average crossovers,
+  MACD/KDJ signals, volume surges, and 60-day highs/lows)
+- **Backtesting engine** — 8 strategies, modelling real A-share trading rules:
+  T+1 settlement, price limits, commissions (min CNY 5), stamp duty, transfer
+  fees, and slippage
+- **AI research reports** — optional LLM integration (any OpenAI-compatible
+  endpoint); falls back to a built-in rule engine when no API key is configured
+- **Scheduled tasks and alerts** — 9 alert rule types with 5 notification
+  channels (WeCom, Telegram, ServerChan, Bark, generic webhook)
+
+### Technical notes
+
+- **Multi-source failover** for market data: Tencent → Eastmoney → Sina →
+  Alpha Vantage. Includes a host pool spanning multiple Eastmoney domain
+  families (their blocks apply per domain family, not per host), circuit
+  breakers, and exponential backoff.
+- **Alpha Vantage integration** — used for end-of-day equity data, with a daily
+  request quota guard, per-second throttling, and aggressive caching to stay
+  within the free tier. It is placed last in the source order and only used as
+  a fallback.
+- **Technical indicators** implemented in pure NumPy — no TA-Lib, so no C
+  toolchain is required (important for NAS deployment).
+- **Frontend assets are vendored** (ECharts is bundled locally), so the UI works
+  on an isolated LAN with no CDN access.
+- **Docker build depends only on pip, not apt** — Debian mirrors are often
+  unreachable from mainland China, and an apt failure aborts the whole build.
+  Timezone data is provided via the PyPI `tzdata` package instead.
+
+### Testing
+
+Four layers of tests are included:
+
+| Script | Scope |
+|---|---|
+| `scripts/selftest.sh` | 21 checks: environment, data source connectivity, indicator math, backtest engine, scheduler |
+| `scripts/robustness.sh` | 38 checks: invalid input, injection attempts, parameter bounds |
+| `scripts/frontend-test.sh` | 31 checks: executes the real frontend JS in jsdom and drives the UI |
+| `scripts/calibrate.py` | Recalibrates scoring thresholds against a live market sample |
+
+### Disclaimer
+
+This project is intended for learning and research purposes only. It does
+**not** constitute investment advice. All market data is sourced from
+third-party public APIs and remains the property of the respective providers.
+
+Licensed under the MIT License.
+
+---
+
 # StockLab · 私有化股票研究系统
 
 部署在你自己的群晖 NAS 上，数据全部留在本地。覆盖 **A股 / 港股 / ETF / 指数**，
