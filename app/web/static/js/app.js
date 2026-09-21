@@ -532,10 +532,16 @@ function drawTrends(d, quote) {
   const times = rows.map(r => String(r.time).slice(-5));   // 只留 HH:MM
   const prices = rows.map(r => r.price);
   const avgs = rows.map(r => (r.avg != null ? r.avg : null));
-  const vols = rows.map(r => ({
-    value: r.volume || 0,
-    itemStyle: { color: (r.price >= (r.open != null ? r.open : r.price)) ? '#f0454b' : '#26a269' },
-  }));
+  // 分时量能柱的颜色必须和**前一分钟**比，涨红跌绿（同花顺口径）。
+  // 不能用 r.price >= r.open：分时是一分钟一个价，每行的 open 恒等于 price，
+  // 这个比较永远成立，结果就是整排量柱全红。第一分钟对比昨收。
+  const vols = rows.map((r, i) => {
+    const base = i > 0 ? rows[i - 1].price : prev;
+    return {
+      value: r.volume || 0,
+      itemStyle: { color: (r.price >= base) ? '#f0454b' : '#26a269' },
+    };
+  });
 
   const last = prices[prices.length - 1];
   const up = last >= prev;

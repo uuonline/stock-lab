@@ -187,6 +187,25 @@ function bad(name, detail) {
       avgN > 0 ? ok('均价线有数据', `${avgN} 点`) : bad('均价线为空');
       const volN = (o.series[2].data || []).filter(d => d && d.value > 0).length;
       volN > 0 ? ok('分钟量柱有数据', `${volN} 根`) : bad('分钟量柱为空');
+
+      // 量能柱必须红绿相间（同花顺口径：与前一分钟比，涨红跌绿）。
+      // 曾经这里用 r.price >= r.open 判断，而分时每行的 open 恒等于 price，
+      // 比较永远成立 —— 结果 242 根量柱全红。
+      {
+        const items = (o.series[2].data || []).filter(d => d && d.itemStyle);
+        const red = items.filter(d => d.itemStyle.color === '#f0454b').length;
+        const grn = items.filter(d => d.itemStyle.color === '#26a269').length;
+        const other = items.length - red - grn;
+        (red > 0 && grn > 0)
+          ? ok('分时量柱红绿相间', `红 ${red} / 绿 ${grn}`)
+          : bad('分时量柱颜色单一', `红 ${red} / 绿 ${grn} / 其他 ${other}`);
+        // 红绿比例不应过度失衡（真实行情下涨跌分钟数接近）
+        const ratio = red / Math.max(1, red + grn);
+        (ratio > 0.05 && ratio < 0.95)
+          ? ok('量柱红绿比例合理', `红占 ${(ratio * 100).toFixed(0)}%`)
+          : bad('量柱红绿比例失衡，疑似判断条件写错', `红占 ${(ratio * 100).toFixed(0)}%`);
+      }
+
       $('#subSeg') && $('#subSeg').style.display === 'none'
         ? ok('分时下隐藏副图选择器') : bad('分时下副图选择器未隐藏');
     }
@@ -217,6 +236,35 @@ function bad(name, detail) {
     ? ok('切日K变为蜡烛图') : bad('切日K未变为蜡烛图');
   $('#subSeg') && $('#subSeg').style.display !== 'none'
     ? ok('切回K线后副图选择器恢复') : bad('副图选择器未恢复');
+
+  // 日K量柱同样要与蜡烛同色（收 >= 开 为红），不能整排一色
+  {
+    const volSeries = ((chartCalls.last || {}).series || [])
+      .find(x => x.name === '成交量' && Array.isArray(x.data));
+    const items = ((volSeries || {}).data || []).filter(d => d && d.itemStyle);
+    const red = items.filter(d => d.itemStyle.color === '#f0454b').length;
+    const grn = items.filter(d => d.itemStyle.color === '#26a269').length;
+    (red > 0 && grn > 0)
+      ? ok('日K量柱红绿相间', `红 ${red} / 绿 ${grn}`)
+      : bad('日K量柱颜色单一', `红 ${red} / 绿 ${grn}`);
+
+    // 量柱颜色必须和蜡烛颜色一致（同涨同跌），否则视觉上自相矛盾
+    const candles = (chartCalls.last.series || []).find(x => x.type === 'candlestick');
+    if (candles && Array.isArray(candles.data) && items.length) {
+      let mismatch = 0;
+      const n = Math.min(candles.data.length, items.length);
+      for (let i = 0; i < n; i++) {
+        const c = candles.data[i];
+        if (!Array.isArray(c)) continue;             // ECharts 的 [open, close, low, high]
+        const candleRed = c[1] >= c[0];              // close >= open
+        const volRed = items[i].itemStyle.color === '#f0454b';
+        if (candleRed !== volRed) mismatch++;
+      }
+      mismatch === 0
+        ? ok('日K量柱与蜡烛同色', `比对 ${n} 根`)
+        : bad('量柱与蜡烛颜色不一致', `${mismatch}/${n} 根不符`);
+    }
+  }
 
   // ---- 箱体分析 ----
   {
