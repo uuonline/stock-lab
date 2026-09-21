@@ -346,6 +346,43 @@ function bad(name, detail) {
   ok('标签来回切换无异常');
 
   // ---- 结果 ----
+  // ---- 路由：刷新后要保持当前页面与股票 ----
+  {
+    window.document.querySelector('.tab[data-view="detail"]').click();
+    await sleep(300);
+    $('#detailInput').value = '000001.SZ';
+    $('#detailGoBtn').click();
+    await waitFor(() => window.location.hash.includes('000001.SZ'), 20000);
+    const h1 = window.location.hash;
+    h1.includes('detail') && h1.includes('000001.SZ')
+      ? ok('地址栏记录了当前个股', h1) : bad('地址栏未记录个股', h1);
+
+    // 模拟刷新：用当前 hash 重建一个页面，应直接回到该个股
+    const dom2 = new JSDOM(html, { url: BASE + '/#' + h1.replace(/^#/, ''),
+      runScripts: 'outside-only', pretendToBeVisual: true });
+    const w2 = dom2.window;
+    w2.fetch = (u, o) => fetch(typeof u === 'string' && u.startsWith('/') ? BASE + u : u, o);
+    w2.matchMedia = window.matchMedia;
+    w2.echarts = window.echarts;
+    w2.alert = () => {}; w2.confirm = () => true; w2.prompt = () => 'x';
+    w2.eval(appJs);
+    w2.document.dispatchEvent(new w2.Event('DOMContentLoaded'));
+    const $2 = (sel) => w2.document.querySelector(sel);
+    const restored = await (async () => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 40000) {
+        if ($2('#view-detail') && $2('#view-detail').classList.contains('active')
+            && $2('#detailInput') && $2('#detailInput').value) return true;
+        await sleep(400);
+      }
+      return false;
+    })();
+    restored
+      ? ok('刷新后仍在个股页（路由还原）', $2('#detailInput').value)
+      : bad('刷新后未还原到个股页');
+    w2.close();
+  }
+
   console.log('\n══════════════════════════════════════════════════════');
   if (errors.length) {
     console.log(`  捕获到 ${errors.length} 个 JS 异常：`);

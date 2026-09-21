@@ -19,6 +19,7 @@ const S = {
   selectedTech: new Set(),
   techParams: {},
   boxData: null,
+  suppressHash: false,
   conditions: [],
   btStrategies: null,
   klineChart: null,
@@ -159,11 +160,55 @@ function md(text) {
 
 /* ---------------- 导航 ---------------- */
 
-function showView(v) {
+/* ---------------- 路由 ----------------
+   把当前页面写进地址栏（#detail/600519.SH 这种形式）。
+   之前 showView 不改 hash，刷新后必然回到总览 ——
+   用户在个股页按 F5 就丢失了正在看的股票。现在刷新、书签、
+   浏览器前进后退都能保持。 */
+
+function currentRoute() {
+  const h = (location.hash || '').replace(/^#/, '');
+  if (!h) return { view: 'dashboard', symbol: null };
+  const parts = h.split('/');
+  let symbol = parts.length > 1 ? parts.slice(1).join('/') : null;
+  if (symbol) { try { symbol = decodeURIComponent(symbol); } catch (e) { /* 保留原值 */ } }
+  return { view: parts[0], symbol };
+}
+
+function setHash(view, symbol) {
+  const want = symbol ? `#${view}/${encodeURIComponent(symbol)}` : `#${view}`;
+  if (location.hash === want) return;
+  S.suppressHash = true;          // 避免自己触发 hashchange 造成重复渲染
+  location.hash = want;
+  setTimeout(() => { S.suppressHash = false; }, 0);
+}
+
+/* 切换页面。symbol 仅对个股页有意义 */
+function showView(v, symbol) {
   S.view = v;
   $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   clearInterval(S.watchTimer); S.watchTimer = null;
+  setHash(v, v === 'detail' ? (symbol || S.detailSymbol) : null);
+  if (v === 'detail' && symbol) {
+    loadDetail(symbol);
+    return;
+  }
+  render();
+}
+
+/* 根据地址栏还原界面。刷新、直接访问带 hash 的网址、前进后退都走这里 */
+function applyRoute() {
+  const { view, symbol } = currentRoute();
+  const v = $('#view-' + view) ? view : 'dashboard';
+  S.view = v;
+  $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
+  $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
+  clearInterval(S.watchTimer); S.watchTimer = null;
+  if (v === 'detail') {
+    const target = symbol || S.detailSymbol;
+    if (target) { loadDetail(target); return; }
+  }
   render();
 }
 
@@ -392,6 +437,7 @@ async function searchSuggest(inputEl, boxEl, onPick) {
 
 async function loadDetail(symbol) {
   S.detailSymbol = symbol;
+  setHash('detail', symbol);
   $('#detailBody').classList.remove('hidden');
   $('#detailInput').value = symbol;
   try {
@@ -1424,7 +1470,7 @@ function bind() {
   // 点击标的跳转详情（事件委托）
   document.addEventListener('click', (e) => {
     const link = e.target.closest('.link[data-sym]');
-    if (link) { showView('detail'); loadDetail(link.dataset.sym); return; }
+    if (link) { showView('detail', link.dataset.sym); return; }
 
     const add = e.target.closest('.add-scr');
     if (add) {
@@ -1571,9 +1617,9 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(tickClock, 1000);
   loadSysStatus();
   setInterval(loadSysStatus, 30000);
-  showView('dashboard');
-  if (location.hash) {
-    const v = location.hash.slice(1);
-    if ($('#view-' + v)) showView(v);
-  }
+  applyRoute();                    // 按地址栏还原，刷新不再丢状态
+  window.addEventListener('hashchange', () => {
+    if (S.suppressHash) return;    // 自己改的 hash 不重复处理
+    applyRoute();
+  });
 });
