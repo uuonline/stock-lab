@@ -145,8 +145,10 @@ def get_kline(
         raise HTTPException(404, f"无 K线数据: {sym}")
     resp: dict[str, Any] = {"symbol": sym, "period": period, "bars": bars, "count": len(bars)}
     if indicators and period in ("day", "week", "month"):
-        resp["indicators"] = ta.compute_all(bars)
-        resp["snapshot"] = ta.latest_snapshot(bars)
+        # 只算一次：latest_snapshot 复用同一份指标，别再重算一遍
+        ind = ta.compute_all(bars)
+        resp["indicators"] = ind
+        resp["snapshot"] = ta.latest_snapshot(bars, ind)
         # 箱体分析随 K线一起返回，前端可直接画在图上
         try:
             q = market.get_quotes([sym]).get(sym) or {}
@@ -289,12 +291,13 @@ def get_indicators(symbol: str, limit: int = Query(260, ge=60, le=1000)) -> dict
         raise HTTPException(503, str(exc)) from exc
     if not bars:
         raise HTTPException(404, "无数据")
+    ind = ta.compute_all(bars)
     return {
         "symbol": sym,
         "name": (market.get_quotes([sym]).get(sym) or {}).get("name") or display_name(sym),
         "bars": len(bars),
-        "snapshot": ta.latest_snapshot(bars),
-        "indicators": ta.compute_all(bars),
+        "snapshot": ta.latest_snapshot(bars, ind),
+        "indicators": ind,
     }
 
 
