@@ -27,7 +27,7 @@ def _f(parts: list[str], idx: int, scale: float = 1.0) -> float | None:
 
 
 def quotes(symbols: list[str], retries: int | None = None,
-           timeout: float | None = None) -> dict[str, dict]:
+           timeout: float | None = None, deadline: float | None = None) -> dict[str, dict]:
     """批量实时行情。腾讯单次建议 <= 60 个。"""
     out: dict[str, dict] = {}
     if not symbols:

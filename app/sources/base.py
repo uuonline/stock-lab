@@ -294,16 +294,35 @@ class CircuitBreaker:
             }
 
 
-# 每个数据源的熔断器
-BREAKERS: dict[str, CircuitBreaker] = {
-    "eastmoney": CircuitBreaker("eastmoney"),
-    "tencent": CircuitBreaker("tencent"),
-    "sina": CircuitBreaker("sina"),
-}
+# 熔断器**按「数据源 + 接口」粒度**，而不是每个源一个。
+#
+# 为什么：同一个源的行情和 K线健康状况可以完全不同。实测东财的行情接口
+# 正常（因此会 record_success 把熔断器重置），但 K线接口整族挂掉、每次要
+# 13 秒才失败 —— 源级熔断器永远关不上，K线首次加载就白等 13 秒。
+# 拆成接口粒度后，K线通道能独立熔断，行情通道不受影响。
+_BREAKER_KEYS = (
+    "eastmoney:quote", "eastmoney:kline", "eastmoney:list", "eastmoney:trends",
+    "tencent:quote", "tencent:kline",
+    "sina:quote", "sina:kline", "sina:list",
+    "alphavantage:quote", "alphavantage:kline",
+)
+BREAKERS: dict[str, CircuitBreaker] = {k: CircuitBreaker(k) for k in _BREAKER_KEYS}
+
+
+def breaker_for(source: str, endpoint: str) -> CircuitBreaker | None:
+    """取指定源+接口的熔断器；未登记的组合返回 None（不熔断）。"""
+    return BREAKERS.get(f"{source}:{endpoint}")
 
 
 def breakers_status() -> dict[str, Any]:
-    return {k: v.status() for k, v in BREAKERS.items()}
+    # 只报告处于熔断状态或最近有失败的，避免状态接口过于冗长
+    out = {}
+    for k, v in BREAKERS.items():
+        st = v.status()
+        if st["open"] or st["consecutive_failures"]:
+            out[k] = st
+    return out or {k: v.status() for k, v in BREAKERS.items()
+                   if k.endswith(":quote") or k.endswith(":kline")}
 
 
 class HostPool:
@@ -379,14 +398,17 @@ def fetch_rotating(
     encoding: str | None = None,
     retries: int | None = None,
     timeout: float | None = None,
+    deadline: float | None = None,
     use_cache: bool = True,
     cache_ttl: float = 0.0,
 ) -> str:
     """在主机池上轮换抓取，任一主机成功即返回。
 
-    retries: 单主机内的重试次数。注意这是**每个主机**的次数，
-             默认取 2（比直连模式的 http_retries 少），
-             因为失败后换主机通常比原地重试更快恢复。
+    retries:  单主机内的重试次数（默认 2）。失败后换主机通常比原地重试更快。
+    deadline: **整次抓取的墙钟死线**（time.monotonic()）。
+              这个参数很重要：主机池有 12 台，如果只限制单次请求的 timeout，
+              最坏情况会变成 12 × timeout —— 实测「1.5 秒预算」实际跑了 4.4 秒。
+              需要严格控时的场景（比如可选的字段补充）必须传 deadline。
     """
     candidates = pool.candidates()
     if not candidates:
@@ -394,12 +416,28 @@ def fetch_rotating(
 
     per_host = 2 if retries is None else max(1, retries)
     last_err: Exception | None = None
-    for host in candidates:
+    for idx, host in enumerate(candidates):
+        eff_timeout = timeout
+        eff_retries = per_host
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            # 剩余预算不足一次像样的请求就没必要再试了
+            if remaining < 0.4:
+                raise FetchError(
+                    f"超出时间预算，已试 {idx} 台主机后放弃: {url}"
+                )
+            # 关键：单次请求的超时必须被剩余预算截断。
+            # 只在主机之间检查 deadline 是不够的 —— 单台主机内部还能跑满
+            # timeout × retries，实测 2.5 秒预算实际跑了 2.9 秒。
+            if eff_timeout is None or eff_timeout > remaining:
+                eff_timeout = remaining
+            if remaining < 1.2:
+                eff_retries = 1
         target = _swap_host(url, host)
         try:
             text = fetch_text(
                 target, params=params, headers=headers, encoding=encoding,
-                retries=per_host, timeout=timeout,
+                retries=eff_retries, timeout=eff_timeout,
                 use_cache=use_cache, cache_ttl=cache_ttl,
             )
             pool.mark_good(host)
@@ -419,12 +457,13 @@ def fetch_json_rotating(
     headers: dict[str, str] | None = None,
     retries: int | None = None,
     timeout: float | None = None,
+    deadline: float | None = None,
     use_cache: bool = True,
     cache_ttl: float = 0.0,
 ) -> Any:
     text = fetch_rotating(
         url, pool, params=params, headers=headers,
-        retries=retries, timeout=timeout,
+        retries=retries, timeout=timeout, deadline=deadline,
         use_cache=use_cache, cache_ttl=cache_ttl,
     )
     text = text.strip()

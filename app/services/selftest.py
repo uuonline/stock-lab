@@ -139,11 +139,15 @@ def check_source_reliability(samples: int = 3) -> str:
     RemoteProtocolError）。东财字段最全但可用性差，这正是默认把腾讯
     放在首位、东财仅用于按需补充字段的原因。这里只报告，不判失败。
     """
+    # 东财两条探针必须限时：它当前被限流，每轮要 10 秒以上逐台主机重试，
+    # 3 轮采样就能把整个自检拖到一分钟。限时后仍能如实反映「失败」。
     probes = [
         ("腾讯·行情", lambda: tencent.quotes(["600519.SH"])),
         ("新浪·行情", lambda: sina.quotes(["600519.SH"])),
-        ("东财·行情", lambda: eastmoney.quotes(["600519.SH"])),
-        ("东财·列表", lambda: eastmoney.market_list("a_share", 1, 20)),
+        ("东财·行情",
+         lambda: eastmoney.quotes(["600519.SH"], deadline=time.monotonic() + 3.0)),
+        ("东财·列表",
+         lambda: eastmoney.market_list("a_share", 1, 20, deadline=time.monotonic() + 3.0)),
     ]
     parts = []
     for name, fn in probes:
@@ -169,7 +173,11 @@ def check_eastmoney_quote() -> str:
 
 
 def check_eastmoney_kline() -> str:
-    bars = eastmoney.kline("600519.SH", "day", 30)
+    # 东财 K线整族当前被限流，逐台主机重试要 13 秒。这只是可选检查，
+    # 不该让整个自检卡在这里 —— 给 4 秒死线，失败就如实报告。
+    bars = eastmoney.kline(
+        "600519.SH", "day", 30, deadline=time.monotonic() + 4.0
+    )
     if len(bars) < 20:
         raise RuntimeError(f"仅返回 {len(bars)} 根K线")
     if bars[-1].get("close") is None:
@@ -178,7 +186,10 @@ def check_eastmoney_kline() -> str:
 
 
 def check_eastmoney_list() -> str:
-    rows, total = eastmoney.market_list("a_share", page=1, size=100)
+    # 同 K线：可选检查，限时 4 秒，避免被限流的源拖住整个自检
+    rows, total = eastmoney.market_list(
+        "a_share", page=1, size=100, deadline=time.monotonic() + 4.0
+    )
     if not rows:
         raise RuntimeError("列表为空")
     return f"首页 {len(rows)} 条 / 全市场 {total} 只"

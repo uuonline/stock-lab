@@ -19,7 +19,7 @@ from ..symbols import (
     INDEX_CODES, asset_type, board_of, display_name, normalize, SymbolError,
 )
 from . import alphavantage, eastmoney, sina, tencent
-from .base import BREAKERS, FetchError, cache
+from .base import FetchError, breaker_for, cache
 
 log = logging.getLogger("stocklab.market")
 
@@ -93,7 +93,7 @@ def get_quotes(
         mod = SOURCES.get(src)
         if mod is None:
             continue
-        breaker = BREAKERS.get(src)
+        breaker = breaker_for(src, "quote")
         if breaker is not None and not breaker.allow():
             log.debug("行情源 %s 处于熔断期，跳过", src)
             errors.append(f"{src}: 熔断中")
@@ -136,6 +136,9 @@ def get_quotes(
     # 预算受控 —— 补充字段（主力净流入）只影响展示丰富度，
     # 绝不能为了它把详情页拖慢几秒。
     if enrich and result:
+        # 注意：这是**整次补充**的墙钟死线，会传到主机池里逐台检查。
+        # 只限制单次请求超时是不够的 —— 主机池有 12 台，
+        # 实测「1.5 秒预算」实际跑了 4.4 秒，详情页明显变卡。
         deadline = time.monotonic() + settings.enrich_budget
         for src in settings.enrich_sources:
             if time.monotonic() >= deadline:
@@ -144,7 +147,7 @@ def get_quotes(
             mod = SOURCES.get(src)
             if mod is None:
                 continue
-            breaker = BREAKERS.get(src)
+            breaker = breaker_for(src, "quote")
             if breaker is not None and not breaker.allow():
                 continue
             need = [
@@ -158,6 +161,7 @@ def get_quotes(
                     need,
                     retries=settings.enrich_retries,
                     timeout=max(1.0, settings.enrich_budget),
+                    deadline=deadline,
                 )
             except Exception as exc:  # noqa: BLE001
                 log.debug("补充源 %s 失败（忽略）: %s", src, exc)
@@ -210,29 +214,39 @@ def get_kline(
     bars: list[dict] = []
     last_err: Exception | None = None
 
-    # 数据源顺序：东财（字段全）→ 腾讯（稳定、支持港股）→ 新浪（兜底）
-    # 实测多个源会被单方面限流（腾讯 fqkline 返 501、东财 push2his 整族被封），
-    # 所以链路要够长。Alpha Vantage 仅支持日线且额度紧，放最后。
-    for src in ("eastmoney", "tencent", "sina", "alphavantage"):
-        breaker = BREAKERS.get(src)
+    # 链路顺序跟随 SL_SOURCE_ORDER，和行情共用同一份配置 ——
+    # 之前这里硬编码了一份列表，用户改配置时 K线不会跟着变。
+    # Alpha Vantage 固定在末位：它只支持日线且额度很紧，只适合最后兜底。
+    chain = [s for s in settings.source_order if s != "alphavantage"]
+    chain.append("alphavantage")
+    # 默认腾讯优先：实测腾讯 286ms / 新浪 92ms，而东财 push2his 整族被限流时
+    # 要 13 秒才失败。三家返回的 OHLCV 完全一致（已逐根比对 600519），
+    # 所以把快的放前面没有代价。
+    for src in chain:
+        breaker = breaker_for(src, "kline")
         if breaker is not None and not breaker.allow():
             log.debug("K线源 %s 处于熔断期，跳过", src)
             last_err = last_err or FetchError(f"{src} 熔断中")
             continue
+        # 单源时间预算：避免某个源挂掉时把整个请求拖到十几秒
+        src_deadline = time.monotonic() + settings.kline_source_budget
         try:
             if src == "eastmoney":
-                bars = eastmoney.kline(sym, period, limit, adjust)
+                bars = eastmoney.kline(sym, period, limit, adjust, deadline=src_deadline)
             elif src == "tencent":
                 bars = tencent.kline(
                     sym, period, limit, "qfq" if adjust == 1 else ("bfq" if adjust == 0 else "hfq")
                 )
             elif src == "sina":
                 bars = sina.kline(sym, period, limit)
-            else:
-                # Alpha Vantage 只支持日线且不支持港股，不满足条件就跳过
+            elif src == "alphavantage":
+                # 只支持日线且不支持港股，不满足条件就跳过
                 if period not in ("day", "daily") or not alphavantage.is_supported(sym):
                     continue
                 bars = alphavantage.kline(sym, period, limit)
+            else:
+                log.debug("K线链路里不认识的源，跳过: %s", src)
+                continue
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             bars = []
@@ -267,7 +281,9 @@ def get_trends(symbol: str, ndays: int = 1) -> list[dict]:
     """当日分时。东财优先（含均价线），腾讯兜底。
 
     实测东财 trends2 在 push2his 整族被封时仍可经 push2delay 取得；
-    若两个域名族都不可用，则用腾讯 minute/query。
+    但东财该接口波动很大（实测 187ms ~ 8705ms），而腾讯 minute/query
+    稳定在 200ms 上下。均价线缺失时本模块会自行算 VWAP，
+    所以腾讯作为首选不影响功能。
     """
     sym = normalize(symbol)
     ck = f"T|{sym}|{ndays}"
@@ -276,13 +292,15 @@ def get_trends(symbol: str, ndays: int = 1) -> list[dict]:
         return hit
 
     rows: list[dict] = []
-    for src in ("eastmoney", "tencent"):
-        breaker = BREAKERS.get(src)
+    # 腾讯优先：实测快得多（187ms vs 东财 8705ms），
+    # 均价线由 _fill_avg 自行计算，不依赖东财
+    for src in ("tencent", "eastmoney"):
+        breaker = breaker_for(src, "trends")
         if breaker is not None and not breaker.allow():
             continue
         try:
-            rows = (eastmoney.trends(sym, ndays) if src == "eastmoney"
-                    else tencent.minutes(sym))
+            rows = (tencent.minutes(sym) if src == "tencent"
+                    else eastmoney.trends(sym, ndays))
         except Exception as exc:  # noqa: BLE001
             log.debug("分时源 %s 失败 %s: %s", src, sym, exc)
             rows = []

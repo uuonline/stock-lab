@@ -55,7 +55,7 @@ LIST_NODES: dict[str, str | None] = {
 
 
 def quotes(symbols: list[str], retries: int | None = None,
-           timeout: float | None = None) -> dict[str, dict]:
+           timeout: float | None = None, deadline: float | None = None) -> dict[str, dict]:
     out: dict[str, dict] = {}
     if not symbols:
         return out

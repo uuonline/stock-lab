@@ -76,8 +76,17 @@ class Settings:
     )
     # 补充请求的快速模式重试次数（比主请求少，避免拖慢响应）
     enrich_retries: int = field(default_factory=lambda: _env_int("SL_ENRICH_RETRIES", 1))
-    # 字段补充的时间预算（秒）。超预算直接放弃补充，保证详情页响应速度。
-    enrich_budget: float = field(default_factory=lambda: _env_float("SL_ENRICH_BUDGET", 1.5))
+    # 单个数据源取 K线的墙钟预算（秒）。
+    # 实测东财 K线整族挂掉时要 13 秒才失败，而腾讯只需 250ms ——
+    # 没有这道闸门，首次加载 K线就会白等十几秒。
+    kline_source_budget: float = field(
+        default_factory=lambda: _env_float("SL_KLINE_SOURCE_BUDGET", 2.5)
+    )
+    # 字段补充（主力净流入）的时间预算（秒）。
+    # 健康时东财约 250ms 就能返回，0.9s 足够；
+    # 数据源抽风时最多让详情页多等 0.9 秒而不是几秒。
+    # 连续失败后该源会被熔断，后续请求直接跳过，不再付出这个代价。
+    enrich_budget: float = field(default_factory=lambda: _env_float("SL_ENRICH_BUDGET", 0.9))
 
     # ---- 回测默认参数 ----
     commission_rate: float = field(default_factory=lambda: _env_float("SL_COMMISSION", 0.00025))

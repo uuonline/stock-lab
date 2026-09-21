@@ -111,7 +111,7 @@ def quote_from_diff(row: dict) -> dict:
 
 
 def quotes(symbols: list[str], retries: int | None = None,
-           timeout: float | None = None) -> dict[str, dict]:
+           timeout: float | None = None, deadline: float | None = None) -> dict[str, dict]:
     """批量实时行情。返回 {symbol: quote}。retries 用于字段补充时的快速模式。"""
     if not symbols:
         return {}
@@ -130,6 +130,7 @@ def quotes(symbols: list[str], retries: int | None = None,
             headers=HEADERS,
             retries=retries,
             timeout=timeout,
+            deadline=deadline,
             cache_ttl=settings.quote_cache_ttl,
         )
         diff = (data.get("data") or {}).get("diff") or []
@@ -160,6 +161,7 @@ def kline(
     adjust: int = 1,
     start: str | None = None,
     end: str | None = None,
+    deadline: float | None = None,
 ) -> list[dict]:
     """K线。period: 1m/5m/15m/30m/60m/day/week/month"""
     klt = PERIOD_MAP.get(period, 101)
@@ -183,6 +185,7 @@ def kline(
         PUSH2HIS_POOL,
         params=params,
         headers=HEADERS,
+        deadline=deadline,
         cache_ttl=settings.kline_cache_ttl,
     )
     node = data.get("data") or {}
@@ -254,8 +257,10 @@ def market_list(
     size: int = 100,
     sort_field: str = "f3",
     ascending: bool = False,
+    deadline: float | None = None,
 ) -> tuple[list[dict], int]:
     """全市场列表。返回 (rows, total)。"""
+    # deadline: 可选的墙钟死线，用于诊断类调用（自检）避免被限流的源拖住
     fs = MARKET_FS.get(kind, MARKET_FS["a_share"])
     data = fetch_json_rotating(
         "https://push2.eastmoney.com/api/qt/clist/get",
@@ -266,6 +271,7 @@ def market_list(
             "fid": sort_field, "fs": fs, "fields": LIST_FIELDS,
         },
         headers=HEADERS,
+        deadline=deadline,
         cache_ttl=settings.snapshot_cache_ttl,
     )
     node = data.get("data") or {}
