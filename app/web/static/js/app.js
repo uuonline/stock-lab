@@ -605,6 +605,39 @@ function drawKline(d) {
     }));
   }
 
+  // ---- 箱体（箱顶/箱底 + 半透明区间）----
+  const boxWin = pickBox(d.box);
+  const boxMarks = [];
+  if (boxWin && dates.length) {
+    const i0 = Math.max(0, Math.min(boxWin.start_index, dates.length - 1));
+    const i1 = Math.max(0, Math.min(boxWin.end_index, dates.length - 1));
+    const d0 = dates[i0], d1 = dates[i1];
+    boxMarks.push({
+      name: '箱体',
+      type: 'candlestick',
+      data: [],
+      xAxisIndex: 0, yAxisIndex: 0,
+      silent: true,
+      markArea: {
+        silent: true,
+        itemStyle: { color: 'rgba(59,130,246,.07)', borderColor: 'rgba(59,130,246,.35)', borderWidth: 1 },
+        label: { show: true, position: 'insideTop', color: '#6b7280', fontSize: 10,
+                 formatter: `箱体 ${boxWin.window}日 · ${boxWin.shape}` },
+        data: [[{ xAxis: d0, yAxis: boxWin.bottom }, { xAxis: d1, yAxis: boxWin.top }]],
+      },
+      markLine: {
+        silent: true, symbol: 'none',
+        data: [
+          { yAxis: boxWin.top, lineStyle: { color: '#f0454b', type: 'dashed', width: 1.2 },
+            label: { formatter: `箱顶 ${boxWin.top}`, color: '#f0454b', fontSize: 10, position: 'insideEndTop' } },
+          { yAxis: boxWin.bottom, lineStyle: { color: '#26a269', type: 'dashed', width: 1.2 },
+            label: { formatter: `箱底 ${boxWin.bottom}`, color: '#26a269', fontSize: 10, position: 'insideEndBottom' } },
+          { yAxis: boxWin.mid, lineStyle: { color: '#6b7280', type: 'dotted', width: 1 } },
+        ],
+      },
+    });
+  }
+
   S.klineChart.hideLoading();
   S.klineChart.setOption({
     backgroundColor: 'transparent',
@@ -646,8 +679,102 @@ function drawKline(d) {
       ...maSeries,
       { name: '成交量', type: 'bar', data: vols, xAxisIndex: 1, yAxisIndex: 1 },
       ...subSeries,
+      ...boxMarks,
     ],
   }, true);
+  renderBoxPanel(d.box);
+}
+
+/* 从多窗口结果里挑一个用于画图：
+   优先「推荐窗口」（置信度最高的震荡箱体），
+   没有箱体时退而使用当前周期窗口，让用户至少看到区间边界。 */
+function pickBox(boxData) {
+  if (!boxData) return null;
+  const wins = boxData.windows || {};
+  const rec = boxData.recommended;
+  if (rec && wins[rec]) return wins[rec];
+  const keys = Object.keys(wins);
+  if (!keys.length) return null;
+  return wins[keys[keys.length - 1]];
+}
+
+/* 箱体分析面板 */
+function renderBoxPanel(boxData) {
+  const el = $('#boxPanel');
+  if (!el) return;
+  if (!boxData || !boxData.windows || !Object.keys(boxData.windows).length) {
+    el.innerHTML = '<span class="muted">数据不足，无法识别箱体</span>';
+    return;
+  }
+  const wins = boxData.windows;
+  const rec = boxData.recommended;
+  const cur = wins[rec] || wins[Object.keys(wins)[0]];
+
+  const shapeColor = cur.shape === '震荡箱体' ? 'var(--accent)'
+    : (cur.shape === '上升通道' ? 'var(--up)' : (cur.shape === '下降通道' ? 'var(--down)' : 'var(--fg2)'));
+  const statusColor = cur.status === '向上突破箱顶' ? 'up'
+    : (cur.status === '向下跌破箱底' ? 'down' : 'flat');
+
+  // 位置条：箱底 0% → 箱顶 100%
+  const pos = Math.max(0, Math.min(100, cur.position_pct));
+  const bar = `
+    <div style="margin:12px 0">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--fg2);margin-bottom:4px">
+        <span>箱底 ${cur.bottom}</span><span>中轴 ${cur.mid}</span><span>箱顶 ${cur.top}</span>
+      </div>
+      <div style="position:relative;height:8px;border-radius:4px;overflow:hidden;
+                  background:linear-gradient(90deg,rgba(38,162,105,.5),rgba(139,148,158,.35),rgba(240,69,75,.5))">
+        <div style="position:absolute;top:-3px;left:calc(${pos}% - 2px);width:4px;height:14px;
+                    background:#fff;border-radius:2px;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>
+      </div>
+      <div style="text-align:center;font-size:12px;margin-top:6px">
+        当前价 <b>${cur.price}</b> 位于箱体 <b>${cur.position_pct}%</b> 位置 · ${esc(cur.zone)}
+      </div>
+    </div>`;
+
+  const rows = [
+    ['形态判定', `<span style="color:${shapeColor};font-weight:600">${esc(cur.shape)}</span>`],
+    ['突破状态', `<span class="${statusColor}">${esc(cur.status)}</span>`],
+    ['箱顶 / 箱底', `${cur.top} / ${cur.bottom}`],
+    ['箱体高度', `${cur.height_pct}%（${cur.height}）`],
+    ['触顶 / 触底次数', `${cur.touch_top} / ${cur.touch_bottom} 次`],
+    ['穿越中轴', `${cur.crosses} 次（每10日 ${cur.crosses_per_10} 次）`],
+    ['日均斜率', `${cur.slope_pct}%`],
+    ['箱体置信度', `${cur.confidence}%`],
+    ['观察区间', `${cur.start_date} ~ ${cur.end_date}（${cur.bars} 根）`],
+  ];
+
+  // 多窗口对比
+  const others = Object.keys(wins).filter(k => k !== rec);
+  const cmp = others.length ? `
+    <h3 class="mt" style="font-size:13px">其他窗口对比</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>窗口</th><th>形态</th><th>箱底</th><th>箱顶</th><th>位置</th><th>置信度</th></tr></thead>
+      <tbody>${others.map(k => {
+        const w = wins[k];
+        const c = w.shape === '震荡箱体' ? 'var(--accent)'
+          : (w.shape === '上升通道' ? 'var(--up)' : (w.shape === '下降通道' ? 'var(--down)' : ''));
+        return `<tr>
+          <td>${w.window} 日</td>
+          <td style="color:${c}">${esc(w.shape)}</td>
+          <td class="num">${w.bottom}</td>
+          <td class="num">${w.top}</td>
+          <td class="num">${w.position_pct}%</td>
+          <td class="num">${w.confidence}%</td></tr>`;
+      }).join('')}</tbody>
+    </table></div>` : '';
+
+  el.innerHTML = `
+    ${bar}
+    <div class="kv-list">${rows.map(([k, v]) =>
+      `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')}</div>
+    <div class="warn-box" style="margin-top:12px">
+      <b>${esc(cur.zone)}</b>：${esc(cur.note)}
+      <br><span style="font-size:12px;opacity:.85">
+      以上箱顶/箱底由最近 ${cur.bars} 根 K线的价格分位数机械推算（已抗单根插针），
+      <b>不构成买卖建议</b>。箱体可能随时被突破，请结合成交量与基本面判断。</span>
+    </div>
+    ${cmp}`;
 }
 
 async function loadTech() {

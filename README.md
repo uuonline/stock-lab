@@ -8,6 +8,12 @@ personal NAS via Docker and is accessed through a browser (desktop and mobile).
 
 - **Watchlist dashboard** — real-time quotes, intraday chart, candlestick
   charts, technical indicators
+- **Trading range (box) analysis** — identifies sideways price ranges and draws
+  the range top (resistance) and bottom (support) on the candlestick chart,
+  together with the current position within the range, boundary touch counts,
+  and a confidence score. It first distinguishes range-bound conditions from
+  trends (via linear-regression slope and mid-line crossing frequency) so that
+  a box is never drawn on a trending stock
 - **Fundamentals** — financial statements, valuation metrics, and a composite
   scoring panel with an explainable breakdown
 - **Screener** — 6 built-in presets plus custom conditions (valuation, market
@@ -427,6 +433,11 @@ SL_NOTIFY_WEBHOOK=        # 通用 Webhook，POST JSON
   港股 331 点（09:30–16:00）
 - **K线图**：蜡烛图 + MA5/10/20/60，支持 5分/30分/60分/日/周/月，可缩放拖动
 - **副图**：MACD / KDJ / RSI 三选一
+- **箱体分析**：识别股价震荡区间，在 K线图上画出箱顶（压力）/箱底（支撑）
+  与半透明箱体区域，并给出当前位置百分比、触碰次数、置信度。
+  关键是**先判断是不是箱体**——趋势行情里硬画箱体会误导，
+  所以用线性回归斜率 + 价格穿越中轴次数区分「震荡箱体 / 上升通道 / 下降通道」，
+  非震荡形态会明确标注并降低置信度
 - **技术指标**：20+ 指标实时值 + 多空综合评分 + 触发信号标签
 - **基本面**：EPS、ROE、毛利率、资产负债率等，附最近 8 期营收/净利趋势
 - **AI 简报**：一键生成研究报告

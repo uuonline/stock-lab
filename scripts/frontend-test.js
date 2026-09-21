@@ -204,6 +204,39 @@ function bad(name, detail) {
     ? ok('切日K变为蜡烛图') : bad('切日K未变为蜡烛图');
   $('#subSeg') && $('#subSeg').style.display !== 'none'
     ? ok('切回K线后副图选择器恢复') : bad('副图选择器未恢复');
+
+  // ---- 箱体分析 ----
+  {
+    // 箱体只在日/周/月 K线上绘制（分时是盘中数据，不适用箱体概念），
+    // 所以这段检查必须放在切到日K之后
+    await waitFor(() => ((chartCalls.last || {}).series || []).some(x => x.name === '箱体'), 45000);
+    const boxSeries = ((chartCalls.last || {}).series || []).find(x => x.name === '箱体');
+    boxSeries ? ok('K线图上已绘制箱体图层') : bad('K线图缺少箱体图层');
+    if (boxSeries) {
+      const ma = boxSeries.markArea;
+      const ml = boxSeries.markLine;
+      (ma && ma.data && ma.data.length) ? ok('箱体半透明区域已绘制') : bad('箱体区域缺失');
+      if (ma && ma.data && ma.data[0]) {
+        const [p0, p1] = ma.data[0];
+        (p0.yAxis != null && p1.yAxis != null && p1.yAxis > p0.yAxis)
+          ? ok('箱体区间上下界正常', `${p0.yAxis} → ${p1.yAxis}`)
+          : bad('箱体区间异常', JSON.stringify([p0, p1]).slice(0, 80));
+        (p0.xAxis && p1.xAxis) ? ok('箱体横向区间正常', `${p0.xAxis} → ${p1.xAxis}`)
+                               : bad('箱体横向区间缺失');
+      }
+      (ml && ml.data && ml.data.length >= 3)
+        ? ok('箱顶/箱底/中轴三条线齐全', `${ml.data.length} 条`)
+        : bad('箱体边界线不全', String(ml && ml.data && ml.data.length));
+    }
+    await waitFor(() => $('#boxPanel') && !$('#boxPanel').textContent.includes('加载中'), 25000);
+    const bt = $('#boxPanel') ? $('#boxPanel').textContent.replace(/\s+/g, ' ') : '';
+    bt.length > 50 ? ok('箱体分析面板已填充', `${bt.length} 字符`) : bad('箱体面板为空');
+    bt.includes('形态判定') ? ok('面板含形态判定') : bad('面板缺少形态判定');
+    bt.includes('箱顶') ? ok('面板含箱顶信息') : bad('面板缺少箱顶');
+    bt.includes('位置') ? ok('面板含位置百分比') : bad('面板缺少位置');
+    bt.includes('不构成买卖建议') ? ok('箱体面板带免责声明') : bad('箱体面板缺少免责声明');
+  }
+
   const before2 = chartCalls.setOption;
   window.document.querySelector('#subSeg .seg-btn[data-sub="kdj"]').click();
   await waitFor(() => chartCalls.setOption > before2, 45000)

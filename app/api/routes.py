@@ -13,6 +13,7 @@ from ..config import settings
 from ..services import ai as ai_svc
 from ..services import alerts as alert_svc
 from ..services import backtest as bt_svc
+from ..services import box as box_svc
 from ..services import indicators as ta
 from ..services import notify as notify_svc
 from ..services import quote as quote_svc
@@ -146,7 +147,48 @@ def get_kline(
     if indicators and period in ("day", "week", "month"):
         resp["indicators"] = ta.compute_all(bars)
         resp["snapshot"] = ta.latest_snapshot(bars)
+        # 箱体分析随 K线一起返回，前端可直接画在图上
+        try:
+            q = market.get_quotes([sym]).get(sym) or {}
+            resp["box"] = box_svc.analyze_multi(bars, q.get("price"))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("箱体分析失败 %s: %s", sym, exc)
     return resp
+
+
+@router.get("/box/{symbol}")
+def get_box(
+    symbol: str,
+    window: int = Query(60, ge=20, le=250),
+    multi: int = Query(0, ge=0, le=1),
+) -> dict:
+    """箱体分析。
+
+    multi=1 时返回 30/60/120/250 四个窗口的对比，方便判断该看哪个周期。
+    """
+    try:
+        sym = normalize(symbol)
+    except SymbolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        bars = market.get_kline(sym, "day", 300)
+    except FetchError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if not bars or len(bars) < 20:
+        raise HTTPException(404, "K线数据不足，无法做箱体分析")
+
+    q = market.get_quotes([sym]).get(sym) or {}
+    price = q.get("price")
+    name = q.get("name") or display_name(sym)
+
+    if multi:
+        res = box_svc.analyze_multi(bars, price)
+        return {"symbol": sym, "name": name, **res}
+
+    r = box_svc.analyze(bars, window, price)
+    if not r:
+        raise HTTPException(404, "数据不足，无法识别箱体")
+    return {"symbol": sym, "name": name, **r}
 
 
 @router.get("/trends/{symbol}")
