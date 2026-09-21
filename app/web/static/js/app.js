@@ -18,6 +18,7 @@ const S = {
   screenTech: null,
   selectedTech: new Set(),
   techParams: {},
+  boxData: null,
   conditions: [],
   btStrategies: null,
   klineChart: null,
@@ -431,6 +432,7 @@ async function loadDetail(symbol) {
   loadKline();
   loadTech();
   loadFundamentals();
+  loadBox();          // 箱体独立加载，避免只在 K线视图下才有数据
   $('#aiReport').className = 'report-box muted';
   $('#aiReport').textContent = '点击「生成简报」开始分析';
 }
@@ -607,11 +609,18 @@ function drawKline(d) {
   }
 
   // ---- 箱体（箱顶/箱底 + 半透明区间）----
-  const boxWin = pickBox(d.box);
+  // 优先用 loadBox 已取到的数据，避免重复请求
+  const boxWin = pickBox(S.boxData || d.box);
   const boxMarks = [];
   if (boxWin && dates.length) {
-    const i0 = Math.max(0, Math.min(boxWin.start_index, dates.length - 1));
-    const i1 = Math.max(0, Math.min(boxWin.end_index, dates.length - 1));
+    // 用**日期**定位而不是索引！
+    // 箱体接口按自己取到的 K线根数（300）算索引，而图表可能取 600 根，
+    // 直接套索引会把箱体画到完全错误的位置上（真实踩过：箱体被画到一年多前）。
+    let i0 = dates.indexOf(boxWin.start_date);
+    let i1 = dates.indexOf(boxWin.end_date);
+    if (i0 < 0) i0 = Math.max(0, Math.min(boxWin.start_index, dates.length - 1));
+    if (i1 < 0) i1 = Math.max(0, Math.min(boxWin.end_index, dates.length - 1));
+    if (i1 < i0) { const t = i0; i0 = i1; i1 = t; }
     const d0 = dates[i0], d1 = dates[i1];
     boxMarks.push({
       name: '箱体',
@@ -683,7 +692,7 @@ function drawKline(d) {
       ...boxMarks,
     ],
   }, true);
-  renderBoxPanel(d.box);
+  // 面板由 loadBox 负责渲染（它不依赖图表周期），这里不再重复调用
 }
 
 /* 从多窗口结果里挑一个用于画图：
@@ -776,6 +785,25 @@ function renderBoxPanel(boxData) {
       <b>不构成买卖建议</b>。箱体可能随时被突破，请结合成交量与基本面判断。</span>
     </div>
     ${cmp}`;
+}
+
+/* 箱体分析：独立请求，不跟随图表周期。
+   箱体是日线级别的概念，看分时图时也应该能看到箱底/箱顶 ——
+   之前这个面板只在 drawKline 里更新，导致默认的分时视图下
+   永远显示「加载中…」（真实踩过的 bug）。 */
+async function loadBox() {
+  const sym = S.detailSymbol;
+  const el = $('#boxPanel');
+  if (!sym || !el) return;
+  el.innerHTML = '<span class="muted">加载中…</span>';
+  try {
+    const d = await api('/box/' + encodeURIComponent(sym) + '?multi=1');
+    S.boxData = d;
+    renderBoxPanel(d);
+  } catch (e) {
+    S.boxData = null;
+    el.innerHTML = `<span class="muted">箱体分析不可用：${esc(e.message)}</span>`;
+  }
 }
 
 async function loadTech() {

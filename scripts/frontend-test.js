@@ -190,6 +190,19 @@ function bad(name, detail) {
       $('#subSeg') && $('#subSeg').style.display === 'none'
         ? ok('分时下隐藏副图选择器') : bad('分时下副图选择器未隐藏');
     }
+
+    // 箱体面板必须与图表周期无关 —— 默认停在分时视图时就该有数据。
+    // 之前它只在 drawKline 里更新，导致分时视图下永远显示「加载中…」。
+    await waitFor(() => {
+      const el = $('#boxPanel');
+      return el && !el.textContent.includes('加载中');
+    }, 30000);
+    {
+      const bt = ($('#boxPanel') ? $('#boxPanel').textContent : '').replace(/\s+/g, ' ');
+      (!bt.includes('加载中') && bt.length > 50)
+        ? ok('分时视图下箱体面板也能加载', `${bt.length} 字符`)
+        : bad('分时视图下箱体面板卡在加载中', bt.slice(0, 60));
+    }
   }
   await waitFor(() => $('#techPanel').textContent.trim().length > 20, 20000)
     ? ok('技术指标面板已填充') : bad('技术指标面板为空');
@@ -223,6 +236,17 @@ function bad(name, detail) {
           : bad('箱体区间异常', JSON.stringify([p0, p1]).slice(0, 80));
         (p0.xAxis && p1.xAxis) ? ok('箱体横向区间正常', `${p0.xAxis} → ${p1.xAxis}`)
                                : bad('箱体横向区间缺失');
+        // 箱体起点必须落在图表实际显示的日期范围内，否则是索引错位
+        {
+          const allDates = ((chartCalls.last || {}).xAxis || [])[0];
+          const ds = allDates && allDates.data ? allDates.data : [];
+          if (ds.length) {
+            const inRange = ds.includes(p0.xAxis) && ds.includes(p1.xAxis);
+            inRange ? ok('箱体区间在图内（无索引错位）')
+                    : bad('箱体区间超出图表范围，疑似索引错位',
+                          `${p0.xAxis} / ${p1.xAxis} 不在 ${ds[0]}~${ds[ds.length-1]} 内`);
+          }
+        }
       }
       (ml && ml.data && ml.data.length >= 3)
         ? ok('箱顶/箱底/中轴三条线齐全', `${ml.data.length} 条`)
