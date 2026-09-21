@@ -16,9 +16,11 @@ personal NAS via Docker and is accessed through a browser (desktop and mobile).
   a box is never drawn on a trending stock
 - **Fundamentals** — financial statements, valuation metrics, and a composite
   scoring panel with an explainable breakdown
-- **Screener** — 6 built-in presets plus custom conditions (valuation, market
-  cap, turnover, and 15 technical conditions such as moving-average crossovers,
-  MACD/KDJ signals, volume surges, and 60-day highs/lows)
+- **Screener** — 9 built-in presets plus custom conditions (valuation, market
+  cap, turnover, and 21 technical conditions including moving-average
+  crossovers, MACD/KDJ signals, volume surges, 60-day highs/lows, and 6
+  trading-range conditions such as "near range bottom", "volume-confirmed
+  range breakout", and "stable sideways range")
 - **Backtesting engine** — 8 strategies, modelling real A-share trading rules:
   T+1 settlement, price limits, commissions (min CNY 5), stamp duty, transfer
   fees, and slippage
@@ -444,11 +446,27 @@ SL_NOTIFY_WEBHOOK=        # 通用 Webhook，POST JSON
 
 ### 选股
 
-6 个内置预设方案，也可自定义：
+9 个内置预设方案，也可自定义：
+
+| 预设 | 说明 |
+|---|---|
+| 低估值蓝筹 | PE 5~20、PB<3、市值>500亿 |
+| 均线金叉 | MA5 上穿 MA20 且站上 60 日线 |
+| 放量突破 | 量比>2 且创 60 日新高 |
+| 超跌反弹 | RSI6<30 且触及布林下轨 |
+| 强势多头 | 均线多头排列 + MACD 红柱 |
+| **箱体底部** | 确认震荡箱体且位置≤20% |
+| **放量突破箱顶** | 突破箱体上沿且量能配合（缩量突破多为假突破） |
+| **箱体震荡（高置信）** | 震荡箱体且置信度≥70%，适合区间高抛低吸 |
+| 低估值+高换手 | PE<15、换手率 3%~15% |
 
 - **快照条件**（毫秒级）：最新价、涨跌幅、成交额、换手率、PE、PB、市值、振幅
-- **技术条件**（需拉K线）：均线金叉/多头排列、MACD金叉、KDJ金叉、RSI超买超卖、
-  放量、创60日新高/新低、布林上下轨、连续上涨
+- **技术条件**（需拉K线，共 21 种）：均线金叉/多头排列、MACD金叉、KDJ金叉、
+  RSI超买超卖、放量、创60日新高/新低、布林上下轨、连续上涨
+- **箱体条件**（6 种）：处于震荡箱体、接近箱底、接近箱顶、向上突破箱顶、
+  向下跌破箱底、放量突破箱顶。全部**先确认形态再判断位置**——
+  趋势行情里位置百分比没有意义（单边下跌的票位置永远是 0%），
+  所以除突破类外一律要求形态为「震荡箱体」
 
 > 技术面条件需要逐只拉取K线，默认扫描前 150 只高成交额标的，约需 1~2 分钟。
 > K线有 15 分钟缓存，同一方案重复执行会快很多。想扫更多可在请求里调 `tech_scan_limit`。

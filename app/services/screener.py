@@ -13,6 +13,7 @@ from .. import db
 from ..symbols import SymbolError, asset_type, board_of
 from ..sources import market
 from ..sources.base import FetchError, swallow
+from . import box as box_svc
 from . import indicators as ta
 
 log = logging.getLogger("stocklab.screener")
@@ -53,6 +54,19 @@ TECH_CONDITIONS = {
     "boll_lower": "触及布林下轨",
     "boll_upper": "触及布林上轨",
     "up_streak": "连续上涨",
+    # ---- 箱体类（先判定形态，再判断位置）----
+    "box_range": "处于震荡箱体",
+    "box_near_bottom": "接近箱底(位置≤20%)",
+    "box_near_top": "接近箱顶(位置≥80%)",
+    "box_breakout": "向上突破箱顶",
+    "box_breakdown": "向下跌破箱底",
+    "box_breakout_vol": "放量突破箱顶",
+}
+
+# 箱体条件需要完整 K线做形态判定，单独处理
+BOX_CONDITIONS = {
+    "box_range", "box_near_bottom", "box_near_top",
+    "box_breakout", "box_breakdown", "box_breakout_vol",
 }
 
 
@@ -92,6 +106,10 @@ def _build_sql(conditions: list[dict], kind: str, exclude_st: bool, exclude_new:
 def _passes_tech(bars: list[dict], cond: str, params: dict) -> bool:
     if len(bars) < 25:
         return False
+
+    if cond in BOX_CONDITIONS:
+        return _passes_box(bars, cond, params)
+
     closes = [b["close"] for b in bars]
     highs = [b["high"] for b in bars]
     lows = [b["low"] for b in bars]
@@ -216,6 +234,53 @@ def _pe_caveat(conditions: list[dict], results: list[dict]) -> list[str]:
     ]
 
 
+def _passes_box(bars: list[dict], cond: str, params: dict) -> bool:
+    """箱体类条件。
+
+    设计原则：**先确认是箱体，再判断位置**。
+    趋势行情里位置百分比没有意义（一只单边下跌的票位置永远是 0%），
+    所以除突破类条件外，一律要求形态为「震荡箱体」。
+
+    突破类条件放宽形态要求 —— 因为突破本身就意味着形态正在改变，
+    此时还要求箱体成立就永远筛不出来了。
+    """
+    window = int(params.get("window", 60))
+    min_conf = int(params.get("min_confidence", 0))
+
+    r = box_svc.analyze(bars, window)
+    if not r:
+        return False
+    if r["confidence"] < min_conf:
+        return False
+
+    if cond == "box_breakout_vol":
+        # 放量突破：突破箱顶 + 量能配合（缩量突破多为假突破）
+        if r["status"] != "向上突破箱顶":
+            return False
+        vols = [b.get("volume") or 0 for b in bars]
+        vma5 = ta.arr_or_nan(ta.sma(vols, 5))
+        import math as _m
+        if len(vma5) == 0 or _m.isnan(vma5[-1]) or vma5[-1] <= 0:
+            return False
+        return (vols[-1] / vma5[-1]) >= float(params.get("vol_mult", 1.5))
+
+    # 以下条件都要求确实是箱体形态
+    if r["shape"] != "震荡箱体":
+        return False
+
+    if cond == "box_range":
+        return True
+    if cond == "box_near_bottom":
+        return r["position_pct"] <= float(params.get("threshold", 20))
+    if cond == "box_near_top":
+        return r["position_pct"] >= float(params.get("threshold", 80))
+    if cond == "box_breakout":
+        return r["status"] == "向上突破箱顶"
+    if cond == "box_breakdown":
+        return r["status"] == "向下跌破箱底"
+    return False
+
+
 def screen(
     conditions: list[dict] | None = None,
     tech: list[str] | None = None,
@@ -319,6 +384,20 @@ def screen(
             r["tech_score"] = snap.get("score")
             r["tech_rating"] = snap.get("rating")
             r["signals"] = [s["text"] for s in snap.get("signals", [])]
+            # 命中箱体条件时附带箱体摘要，前端可直接展示
+            box_used = next((t for t in tech if t in BOX_CONDITIONS), None)
+            if box_used:
+                bx = box_svc.analyze(
+                    bars, int((tech_params.get(box_used) or {}).get("window", 60))
+                )
+                if bx:
+                    r["box"] = {
+                        "shape": bx["shape"], "status": bx["status"],
+                        "bottom": bx["bottom"], "top": bx["top"],
+                        "position_pct": bx["position_pct"],
+                        "confidence": bx["confidence"], "window": bx["window"],
+                        "zone": bx["zone"],
+                    }
             passed.append(r)
 
     warnings.extend(_pe_caveat(conditions, passed))
@@ -387,6 +466,37 @@ def presets() -> list[dict]:
                 {"field": "market_cap", "op": "gt", "value": 10_000_000_000},
             ],
             "tech": ["ma_bull", "macd_bull"],
+        },
+        {
+            "key": "box_bottom",
+            "name": "箱体底部",
+            "desc": "确认处于震荡箱体，且现价接近箱底（位置≤20%）",
+            "conditions": [
+                {"field": "amount", "op": "gt", "value": 100_000_000},
+                {"field": "market_cap", "op": "gt", "value": 5_000_000_000},
+            ],
+            "tech": ["box_near_bottom"],
+        },
+        {
+            "key": "box_breakout",
+            "name": "放量突破箱顶",
+            "desc": "向上突破箱体上沿且成交量配合（缩量突破多为假突破）",
+            "conditions": [
+                {"field": "amount", "op": "gt", "value": 150_000_000},
+                {"field": "market_cap", "op": "gt", "value": 5_000_000_000},
+            ],
+            "tech": ["box_breakout_vol"],
+        },
+        {
+            "key": "box_range_stable",
+            "name": "箱体震荡（高置信）",
+            "desc": "形态明确为震荡箱体，箱体置信度≥70%，适合做区间高抛低吸",
+            "conditions": [
+                {"field": "amount", "op": "gt", "value": 100_000_000},
+                {"field": "market_cap", "op": "gt", "value": 10_000_000_000},
+            ],
+            "tech": ["box_range"],
+            "tech_params": {"box_range": {"window": 60, "min_confidence": 70}},
         },
         {
             "key": "low_pe_growth",

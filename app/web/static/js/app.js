@@ -17,6 +17,7 @@ const S = {
   screenFields: null,
   screenTech: null,
   selectedTech: new Set(),
+  techParams: {},
   conditions: [],
   btStrategies: null,
   klineChart: null,
@@ -893,6 +894,8 @@ async function initScreener() {
           const p = S.screenPresets.find(x => x.key === el.dataset.key);
           S.conditions = JSON.parse(JSON.stringify(p.conditions || []));
           S.selectedTech = new Set(p.tech || []);
+          // 预设可能带技术条件参数（如箱体置信度门槛），必须一起载入
+          S.techParams = JSON.parse(JSON.stringify(p.tech_params || {}));
           renderConditions();
           renderTechChips();
         };
@@ -902,7 +905,12 @@ async function initScreener() {
       $$('#techPick .tech-chip').forEach(el => {
         el.onclick = () => {
           const k = el.dataset.tech;
-          if (S.selectedTech.has(k)) S.selectedTech.delete(k); else S.selectedTech.add(k);
+          if (S.selectedTech.has(k)) {
+            S.selectedTech.delete(k);
+            delete S.techParams[k];        // 移除条件时清掉它的参数
+          } else {
+            S.selectedTech.add(k);
+          }
           renderTechChips();
         };
       });
@@ -910,6 +918,7 @@ async function initScreener() {
         const p = S.screenPresets[0];
         S.conditions = JSON.parse(JSON.stringify(p.conditions || []));
         S.selectedTech = new Set(p.tech || []);
+        S.techParams = JSON.parse(JSON.stringify(p.tech_params || {}));
         $('#presetList .preset')?.classList.add('active');
       }
       renderConditions();
@@ -954,6 +963,7 @@ async function runScreen() {
       body: {
         conditions: S.conditions,
         tech: Array.from(S.selectedTech),
+        tech_params: S.techParams || {},
         exclude_st: $('#excludeST').checked,
         exclude_new: $('#excludeNew').checked,
         order: $('#orderSelect').value,
