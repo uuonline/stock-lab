@@ -163,17 +163,22 @@ def get_box(
     symbol: str,
     window: int = Query(60, ge=20, le=250),
     multi: int = Query(0, ge=0, le=1),
+    adaptive: int = Query(0, ge=0, le=1),
 ) -> dict:
     """箱体分析。
 
-    multi=1 时返回 30/60/120/250 四个窗口的对比，方便判断该看哪个周期。
+    multi=1    返回 30/60/120/250 四个窗口的对比，方便判断该看哪个周期。
+    adaptive=1 按该股自身的波段节奏推荐窗口（固定窗口用同一把尺子量所有股票，
+               并不贴合个股节奏）。需要更长历史，所以多取一些 K线。
     """
     try:
         sym = normalize(symbol)
     except SymbolError as exc:
         raise HTTPException(400, str(exc)) from exc
+    # 自适应要扫到 250 天窗口 + 测节奏，300 根不够
+    need = 800 if adaptive else 300
     try:
-        bars = market.get_kline(sym, "day", 300)
+        bars = market.get_kline(sym, "day", need)
     except FetchError as exc:
         raise HTTPException(503, str(exc)) from exc
     if not bars or len(bars) < 20:
@@ -182,6 +187,9 @@ def get_box(
     q = market.get_quotes([sym]).get(sym) or {}
     price = q.get("price")
     name = q.get("name") or display_name(sym)
+
+    if adaptive:
+        return {"symbol": sym, "name": name, **box_svc.adaptive(bars, price)}
 
     if multi:
         res = box_svc.analyze_multi(bars, price)

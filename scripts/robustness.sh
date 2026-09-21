@@ -137,6 +137,36 @@ check "AI空symbol"          400 "$BASE/api/ai/report" -X POST -H 'Content-Type:
 check "回测历史limit越界"   422 "$BASE/api/backtest/history?limit=99999"
 
 echo
+echo "── 箱体自适应窗口 ──"
+check "自适应箱体正常"      200 "$BASE/api/box/002241.SZ?adaptive=1"
+check "自适应+非法标的"     400 "$BASE/api/box/BOGUS?adaptive=1"
+check "自适应参数越界"      422 "$BASE/api/box/002241.SZ?adaptive=9"
+check_has "返回推荐窗口"    '"recommended_window"' "$BASE/api/box/002241.SZ?adaptive=1"
+check_has "返回节奏测量"    '"levels"' "$BASE/api/box/002241.SZ?adaptive=1"
+check_has "返回扫描曲线"    '"curve"' "$BASE/api/box/002241.SZ?adaptive=1"
+check_has "返回可信度标记"  '"trustworthy"' "$BASE/api/box/002241.SZ?adaptive=1"
+# 趋势股应当被如实标成「没有可信箱体」，而不是硬塞一个最不难看的窗口
+check_has "趋势股如实拒绝"  '"trustworthy":false' "$BASE/api/box/000001.SZ?adaptive=1"
+
+# 请求更多历史必须真的拿到更多。
+# 各家历史深度不同（腾讯在请求 >800 根时上游只回 641 根，新浪能回 1000+），
+# 曾经 limit=1000 拿到的比 limit=800 还少。
+check_more_bars() {
+  local short long
+  short=$(curl -s -m 60 "$BASE/api/kline/002241.SZ?period=day&limit=400" | grep -o '"date"' | wc -l)
+  long=$(curl -s -m 60 "$BASE/api/kline/002241.SZ?period=day&limit=1000" | grep -o '"date"' | wc -l)
+  if [ "$long" -gt 0 ] && [ "$long" -ge "$short" ]; then
+    printf "  \033[32m✓\033[0m %-38s %s → %s 根\n" "请求更多历史不倒退" "$short" "$long"
+    PASS=$((PASS+1))
+  else
+    printf "  \033[31m✗\033[0m %-38s limit=400 得 %s 根，limit=1000 只得 %s 根\n" \
+      "请求更多历史不倒退" "$short" "$long"
+    FAIL=$((FAIL+1))
+  fi
+}
+check_more_bars
+
+echo
 echo "══════════════════════════════════════════════════════"
 printf "  通过 %d   失败 %d   警告 %d\n" "$PASS" "$FAIL" "$WARN"
 echo "══════════════════════════════════════════════════════"

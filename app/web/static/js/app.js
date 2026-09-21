@@ -19,6 +19,7 @@ const S = {
   selectedTech: new Set(),
   techParams: {},
   boxData: null,
+  boxMode: 'adaptive',   // 箱体默认按个股节奏取窗口（可切回固定窗口对比）
   suppressHash: false,
   conditions: [],
   btStrategies: null,
@@ -622,6 +623,7 @@ function drawTrends(d, quote) {
 }
 
 function drawKline(d) {
+  S.lastKline = d;              // 切换箱体模式后要用它重画
   const bars = d.bars || [];
   if (!bars.length) { S.klineChart.hideLoading(); toast('无K线数据', 'err'); return; }
   const ind = d.indicators || {};
@@ -752,6 +754,8 @@ function drawKline(d) {
    没有箱体时退而使用当前周期窗口，让用户至少看到区间边界。 */
 function pickBox(boxData) {
   if (!boxData) return null;
+  // 自适应结果：窗口是按个股节奏推出来的，直接用它的分析
+  if (boxData.adaptive && boxData.analysis) return boxData.analysis;
   const wins = boxData.windows || {};
   const rec = boxData.recommended;
   if (rec && wins[rec]) return wins[rec];
@@ -764,8 +768,22 @@ function pickBox(boxData) {
 function renderBoxPanel(boxData) {
   const el = $('#boxPanel');
   if (!el) return;
+
+  // 模式切换按钮
+  const mode = boxData && boxData.adaptive ? 'adaptive' : 'fixed';
+  const seg = `
+    <div class="seg" id="boxModeSeg" style="margin-bottom:10px">
+      <button class="seg-btn${mode === 'adaptive' ? ' active' : ''}" data-boxmode="adaptive">按个股节奏</button>
+      <button class="seg-btn${mode === 'fixed' ? ' active' : ''}" data-boxmode="fixed">固定窗口</button>
+    </div>`;
+
+  if (boxData && boxData.adaptive) {
+    renderAdaptivePanel(el, boxData, seg);
+    return;
+  }
+
   if (!boxData || !boxData.windows || !Object.keys(boxData.windows).length) {
-    el.innerHTML = '<span class="muted">数据不足，无法识别箱体</span>';
+    el.innerHTML = seg + '<span class="muted">数据不足，无法识别箱体</span>';
     return;
   }
   const wins = boxData.windows;
@@ -827,6 +845,7 @@ function renderBoxPanel(boxData) {
     </table></div>` : '';
 
   el.innerHTML = `
+    ${seg}
     ${bar}
     <div class="kv-list">${rows.map(([k, v]) =>
       `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')}</div>
@@ -839,6 +858,102 @@ function renderBoxPanel(boxData) {
     ${cmp}`;
 }
 
+/* 自适应箱体面板：要说清楚「为什么是这么多天」，
+   否则用户只看到一个数字，没法判断该不该信它。 */
+function renderAdaptivePanel(el, d, seg) {
+  const a = d.analysis;
+  if (!a) {
+    el.innerHTML = seg + `<span class="muted">${esc(d.verdict || '无法识别箱体')}</span>`;
+    return;
+  }
+  const rh = d.rhythm || {};
+  const band = d.band || {};
+  const pl = d.plateau || {};
+
+  const shapeColor = a.shape === '震荡箱体' ? 'var(--accent)'
+    : (a.shape === '上升通道' ? 'var(--up)' : (a.shape === '下降通道' ? 'var(--down)' : 'var(--fg2)'));
+  const statusColor = a.status === '向上突破箱顶' ? 'up'
+    : (a.status === '向下跌破箱底' ? 'down' : 'flat');
+  const pos = Math.max(0, Math.min(100, a.position_pct));
+
+  const posBar = `
+    <div style="margin:12px 0">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--fg2);margin-bottom:4px">
+        <span>箱底 ${a.bottom}</span><span>中轴 ${a.mid}</span><span>箱顶 ${a.top}</span>
+      </div>
+      <div style="position:relative;height:8px;border-radius:4px;overflow:hidden;
+                  background:linear-gradient(90deg,rgba(38,162,105,.5),rgba(139,148,158,.35),rgba(240,69,75,.5))">
+        <div style="position:absolute;top:-3px;left:calc(${pos}% - 2px);width:4px;height:14px;
+                    background:#fff;border-radius:2px;box-shadow:0 0 4px rgba(0,0,0,.6)"></div>
+      </div>
+      <div style="text-align:center;font-size:12px;margin-top:6px">
+        当前价 <b>${a.price}</b> 位于箱体 <b>${a.position_pct}%</b> 位置 · ${esc(a.zone)}
+      </div>
+    </div>`;
+
+  // 节奏阶梯：把嵌套的波动级别摊开给用户看
+  const levels = (rh.levels || []).map(lv => `
+    <tr${lv.threshold_pct === (rh.mid_level || {}).threshold_pct ? ' style="background:rgba(88,166,255,.10)"' : ''}>
+      <td>${lv.threshold_pct}%</td>
+      <td class="num">${lv.legs}</td>
+      <td class="num">${lv.median_leg_days} 天</td>
+      <td class="num">${lv.cycle_days} 天</td>
+    </tr>`).join('');
+
+  const rhythmTable = levels ? `
+    <h3 class="mt" style="font-size:13px">该股自身的波动节奏</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>波动档位</th><th>波段数</th><th>单边中位长度</th><th>完整往复</th></tr></thead>
+      <tbody>${levels}</tbody>
+    </table></div>
+    <div class="muted mt" style="font-size:12px">
+      高亮行是用于推算窗口的档位：小档位是噪声，大档位是趋势，中间档才是「在区间里来回磨」的级别。
+    </div>` : '';
+
+  const rows = [
+    ['推荐窗口', `<b>${d.recommended_window} 日</b>（按该股节奏推出）`],
+    ['形态判定', `<span style="color:${shapeColor};font-weight:600">${esc(a.shape)}</span>`],
+    ['突破状态', `<span class="${statusColor}">${esc(a.status)}</span>`],
+    ['箱顶 / 箱底', `${a.top} / ${a.bottom}`],
+    ['箱体高度', `${a.height_pct}%（${a.height}）`],
+    ['触顶 / 触底次数', `${a.touch_top} / ${a.touch_bottom} 次`],
+    ['箱内占比', `${Math.round((a.inside_ratio || 0) * 100)}% 的收盘价落在箱内`],
+    ['穿越中轴', `${a.crosses} 次（每10日 ${a.crosses_per_10} 次）`],
+    ['边界漂移', `上沿 ${a.top_drift} / 下沿 ${a.bot_drift}（单位：箱体高度）`],
+    ['日均斜率', `${a.slope_pct}%`],
+    ['箱体置信度', `${a.confidence}%`],
+    ['观察区间', `${a.start_date} ~ ${a.end_date}（${a.bars} 根）`],
+  ];
+
+  const warn = d.trustworthy === false
+    ? `<div class="warn-box" style="margin-top:12px;border-color:var(--down)">
+         <b style="color:var(--down)">当前没有可信的箱体</b><br>${esc(d.verdict || '')}
+       </div>`
+    : '';
+
+  el.innerHTML = `
+    ${seg}
+    ${warn}
+    <div class="kv-list">${rows.map(([k, v]) =>
+      `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')}</div>
+    ${posBar}
+    ${rhythmTable}
+    <h3 class="mt" style="font-size:13px">为什么是 ${d.recommended_window} 日</h3>
+    <div class="kv-list">
+      <div class="kv"><span class="k">① 节奏定范围</span><span class="v">${esc(band.note || '—')}</span></div>
+      <div class="kv"><span class="k">② 分数选平台</span><span class="v">${esc(d.reason || '')}</span></div>
+      ${d.fixed_best ? `<div class="kv"><span class="k">对比固定窗口</span><span class="v">
+        固定最优 ${d.fixed_best.window} 日（分数 ${d.fixed_best.score}）
+        → 自适应 ${d.recommended_window} 日（分数 ${pl.top_score}）</span></div>` : ''}
+    </div>
+    <div class="warn-box" style="margin-top:12px">
+      <b>${esc(a.zone)}</b>：${esc(a.note)}
+      <br><span style="font-size:12px;opacity:.85">
+      窗口按该股历史波段节奏推算，箱顶/箱底由价格分位数机械得出（已抗单根插针），
+      <b>不构成买卖建议</b>。节奏会随行情变化，箱体可能随时被突破。</span>
+    </div>`;
+}
+
 /* 箱体分析：独立请求，不跟随图表周期。
    箱体是日线级别的概念，看分时图时也应该能看到箱底/箱顶 ——
    之前这个面板只在 drawKline 里更新，导致默认的分时视图下
@@ -848,14 +963,23 @@ async function loadBox() {
   const el = $('#boxPanel');
   if (!sym || !el) return;
   el.innerHTML = '<span class="muted">加载中…</span>';
+  const mode = S.boxMode || 'adaptive';
   try {
-    const d = await api('/box/' + encodeURIComponent(sym) + '?multi=1');
+    const q = mode === 'adaptive' ? '?adaptive=1' : '?multi=1';
+    const d = await api('/box/' + encodeURIComponent(sym) + q);
+    d.adaptive = (mode === 'adaptive');     // 标记来源，渲染与画图都要用
     S.boxData = d;
     renderBoxPanel(d);
+    drawBoxOnChart();
   } catch (e) {
     S.boxData = null;
     el.innerHTML = `<span class="muted">箱体分析不可用：${esc(e.message)}</span>`;
   }
+}
+
+/* 切模式后重画图上的箱体（面板自己有按钮，图上的框要跟着换） */
+function drawBoxOnChart() {
+  if (S.lastKline) drawKline(S.lastKline);
 }
 
 async function loadTech() {
@@ -1472,6 +1596,16 @@ function bind() {
     const b = e.target.closest('.seg-btn');
     if (b) loadMovers(b.dataset.kind);
   };
+
+  // 箱体模式切换：面板每次渲染都会重建，所以用事件委托绑在外层容器上
+  $('#boxPanel').addEventListener('click', (e) => {
+    const b = e.target.closest('.seg-btn[data-boxmode]');
+    if (!b) return;
+    const m = b.dataset.boxmode;
+    if (m === S.boxMode) return;
+    S.boxMode = m;
+    loadBox();
+  });
 
   // 点击标的跳转详情（事件委托）
   document.addEventListener('click', (e) => {

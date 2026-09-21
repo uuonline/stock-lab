@@ -21,6 +21,11 @@ from ..symbols import (
 from . import alphavantage, eastmoney, sina, tencent
 from .base import FetchError, breaker_for, cache
 
+# 某个源返回的 K线不够长时，最多再多试几家取更长的那个（各家历史深度不同）
+KLINE_MAX_EXTRA_SOURCES = 2
+# 已经拿到数据、只为补更长历史时的单源预算（秒），比正常预算紧
+KLINE_EXTRA_BUDGET = 1.0
+
 log = logging.getLogger("stocklab.market")
 
 QUOTE_KEYS = (
@@ -213,6 +218,7 @@ def get_kline(
 
     bars: list[dict] = []
     last_err: Exception | None = None
+    best_src: str | None = None
 
     # 链路顺序跟随 SL_SOURCE_ORDER，和行情共用同一份配置 ——
     # 之前这里硬编码了一份列表，用户改配置时 K线不会跟着变。
@@ -222,41 +228,79 @@ def get_kline(
     # 默认腾讯优先：实测腾讯 286ms / 新浪 92ms，而东财 push2his 整族被限流时
     # 要 13 秒才失败。三家返回的 OHLCV 完全一致（已逐根比对 600519），
     # 所以把快的放前面没有代价。
+    #
+    # 但「第一个成功就返回」有个坑：各家能提供的**历史深度不同**。
+    # 实测腾讯 fqkline 在请求超过 800 根时，上游会悄悄只回 641 根
+    # （请求 900/1000/1200 全都是 641），而新浪能回 1000 根以上。
+    # 于是 /api/kline?limit=1000 拿到的反而比 limit=800 更少。
+    # 所以这里改成：拿到数据后如果还不够长，就再多试一两家，取最长的那个。
+    succeeded = 0
     for src in chain:
         breaker = breaker_for(src, "kline")
         if breaker is not None and not breaker.allow():
             log.debug("K线源 %s 处于熔断期，跳过", src)
             last_err = last_err or FetchError(f"{src} 熔断中")
             continue
-        # 单源时间预算：避免某个源挂掉时把整个请求拖到十几秒
-        src_deadline = time.monotonic() + settings.kline_source_budget
+        # 单源时间预算：避免某个源挂掉时把整个请求拖到十几秒。
+        # 已经有了可用数据、只是为了拿更长历史而继续试的时候，预算收紧到
+        # KLINE_EXTRA_BUDGET —— 这时多试只是锦上添花，不值得为它多等几秒
+        # （实测东财挂掉时会让 limit=1000 的请求白等 2.5 秒才落到新浪）。
+        budget = settings.kline_source_budget
+        if bars:
+            budget = min(budget, KLINE_EXTRA_BUDGET)
+        src_deadline = time.monotonic() + budget
         try:
             if src == "eastmoney":
-                bars = eastmoney.kline(sym, period, limit, adjust, deadline=src_deadline)
+                got = eastmoney.kline(sym, period, limit, adjust, deadline=src_deadline)
             elif src == "tencent":
-                bars = tencent.kline(
+                got = tencent.kline(
                     sym, period, limit, "qfq" if adjust == 1 else ("bfq" if adjust == 0 else "hfq")
                 )
             elif src == "sina":
-                bars = sina.kline(sym, period, limit)
+                # 新浪这个接口只有不复权数据。请求的是前复权（adjust=1）时
+                # 拿它的数据会静默混入价格口径错误的历史（实测中位差 2~3%，
+                # 足以挪动箱体边界），所以直接跳过，宁可少给数据。
+                if adjust != 0:
+                    log.debug("新浪K线无复权数据，本次请求 adjust=%s，跳过新浪", adjust)
+                    continue
+                got = sina.kline(sym, period, limit)
             elif src == "alphavantage":
                 # 只支持日线且不支持港股，不满足条件就跳过
                 if period not in ("day", "daily") or not alphavantage.is_supported(sym):
                     continue
-                bars = alphavantage.kline(sym, period, limit)
+                got = alphavantage.kline(sym, period, limit)
             else:
                 log.debug("K线链路里不认识的源，跳过: %s", src)
                 continue
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            bars = []
             if breaker is not None:
                 breaker.record_failure()
             continue
-        if bars:
-            if breaker is not None:
-                breaker.record_success()
+
+        if not got:
+            continue
+        if breaker is not None:
+            breaker.record_success()
+        succeeded += 1
+
+        if len(got) > len(bars):
+            bars, best_src = got, src
+
+        # 要够了就走，不折腾
+        if len(bars) >= limit:
             break
+        # 还没要够：日线历史深度各家不同，再多试一两家取更长的那个。
+        # 最多多看 2 家，避免「本来就上市不久」的标的把整条链路都跑一遍。
+        if period == "day" and succeeded <= KLINE_MAX_EXTRA_SOURCES:
+            log.debug(
+                "K线只拿到 %d 根（目标 %d），继续试下一个源取更长历史", len(bars), limit
+            )
+            continue
+        break
+
+    if best_src:
+        log.debug("K线最终采用 %s 的 %d 根（目标 %d）", best_src, len(bars), limit)
 
     if not bars and use_local and period == "day":
         local = db.load_kline(sym)

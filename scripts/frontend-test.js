@@ -57,8 +57,11 @@ function bad(name, detail) {
   const { window } = dom;
 
   // ---- 2. 注入必要的浏览器 API ----
+  // 记录箱体请求，供「默认走自适应」「能切回固定窗口」两条断言使用
+  window.__boxCalls = [];
   window.fetch = (u, o) => {
     const url = typeof u === 'string' && u.startsWith('/') ? BASE + u : u;
+    if (typeof url === 'string' && url.includes('/api/box/')) window.__boxCalls.push(url);
     return fetch(url, o);
   };
   window.matchMedia = window.matchMedia || (() => ({
@@ -215,7 +218,7 @@ function bad(name, detail) {
     await waitFor(() => {
       const el = $('#boxPanel');
       return el && !el.textContent.includes('加载中');
-    }, 30000);
+    }, 45000);
     {
       const bt = ($('#boxPanel') ? $('#boxPanel').textContent : '').replace(/\s+/g, ' ');
       (!bt.includes('加载中') && bt.length > 50)
@@ -300,13 +303,44 @@ function bad(name, detail) {
         ? ok('箱顶/箱底/中轴三条线齐全', `${ml.data.length} 条`)
         : bad('箱体边界线不全', String(ml && ml.data && ml.data.length));
     }
-    await waitFor(() => $('#boxPanel') && !$('#boxPanel').textContent.includes('加载中'), 25000);
+    await waitFor(() => $('#boxPanel') && !$('#boxPanel').textContent.includes('加载中'), 45000);
     const bt = $('#boxPanel') ? $('#boxPanel').textContent.replace(/\s+/g, ' ') : '';
     bt.length > 50 ? ok('箱体分析面板已填充', `${bt.length} 字符`) : bad('箱体面板为空');
     bt.includes('形态判定') ? ok('面板含形态判定') : bad('面板缺少形态判定');
     bt.includes('箱顶') ? ok('面板含箱顶信息') : bad('面板缺少箱顶');
     bt.includes('位置') ? ok('面板含位置百分比') : bad('面板缺少位置');
     bt.includes('不构成买卖建议') ? ok('箱体面板带免责声明') : bad('箱体面板缺少免责声明');
+
+    // ---- 自适应窗口（按个股节奏定期数）----
+    const boxApi = (window.__boxCalls || []).slice(-1)[0] || '';
+    boxApi.includes('adaptive=1')
+      ? ok('箱体面板默认走自适应模式', boxApi) : bad('默认没有走自适应模式', boxApi);
+    bt.includes('推荐窗口') ? ok('面板显示推荐窗口') : bad('面板缺少推荐窗口');
+    bt.includes('为什么是') ? ok('面板说明了窗口的由来') : bad('面板未说明窗口由来');
+    bt.includes('波动档位') || bt.includes('该股自身的波动节奏')
+      ? ok('面板展示该股自身节奏') : bad('面板缺少节奏说明');
+    bt.includes('节奏定范围') && bt.includes('分数选平台')
+      ? ok('面板展示两步推导过程') : bad('面板缺少推导过程');
+    /推荐窗口\s*\d+\s*日/.test(bt) ? ok('推荐窗口给出了具体天数') : bad('推荐窗口天数缺失');
+
+    // 切到固定窗口模式，应重新请求并渲染对比表
+    {
+      const before = (window.__boxCalls || []).length;
+      const btn = window.document.querySelector('#boxPanel .seg-btn[data-boxmode="fixed"]');
+      if (btn) {
+        btn.click();
+        await waitFor(() => (window.__boxCalls || []).length > before, 30000);
+        const called = ((window.__boxCalls || []).slice(-1)[0] || '');
+        called.includes('multi=1')
+          ? ok('可切换回固定窗口模式', called) : bad('切固定窗口未重新请求', called);
+        await waitFor(() => $('#boxPanel').textContent.includes('其他窗口对比')
+          || $('#boxPanel').textContent.includes('形态判定'), 30000);
+        ($('#boxPanel').textContent.includes('其他窗口对比'))
+          ? ok('固定窗口模式显示多窗口对比') : bad('固定模式缺少对比表');
+      } else {
+        bad('找不到固定窗口切换按钮');
+      }
+    }
   }
 
   const before2 = chartCalls.setOption;
