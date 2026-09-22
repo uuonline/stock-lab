@@ -237,6 +237,11 @@ function applyRoute() {
     const target = symbol || S.detailSymbol;
     if (target) { loadDetail(target); return; }
   }
+  if (v === 'anomaly' && symbol) {
+    if ($('#anomalySymbol')) $('#anomalySymbol').value = symbol;
+    runAnomaly(symbol);
+    return;
+  }
   if (v === 'flow' && symbol) {
     // 带标的的地址（#flow/002241.SZ）直接跑，刷新后能还原
     if ($('#flowSymbol')) $('#flowSymbol').value = symbol;
@@ -257,6 +262,11 @@ function render() {
       // 已有结果就保留，没有就把输入框填上当前个股。
       if ($('#flowSymbol') && !$('#flowSymbol').value && S.detailSymbol) {
         $('#flowSymbol').value = S.detailSymbol;
+      }
+      return;
+    case 'anomaly':
+      if ($('#anomalySymbol') && !$('#anomalySymbol').value && S.detailSymbol) {
+        $('#anomalySymbol').value = S.detailSymbol;
       }
       return;
     case 'backtest':  return initBacktest();
@@ -1947,6 +1957,158 @@ async function copyFlowPack() {
   }
 }
 
+
+/* ============ 异动归因 ============ */
+function anomBar(label, pct, max) {
+  const n = Math.max(-1, Math.min(1, (pct || 0) / (max || 1)));
+  const w = Math.abs(n) * 50;
+  const left = n >= 0 ? 50 : 50 - w;
+  const color = n >= 0 ? 'var(--up)' : 'var(--down)';
+  return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+    <span style="flex:0 0 92px;font-size:12px;color:var(--fg2)">${esc(label)}</span>
+    <div style="flex:1 1 auto;position:relative;height:14px;background:rgba(139,148,158,.12);border-radius:3px">
+      <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border)"></div>
+      <div style="position:absolute;left:${left}%;width:${w}%;top:2px;bottom:2px;background:${color};border-radius:2px"></div>
+    </div>
+    <span style="flex:0 0 62px;text-align:right;font-size:12px">${pct === null || pct === undefined ? '—' : (pct >= 0 ? '+' : '') + Number(pct).toFixed(2) + '%'}</span>
+  </div>`;
+}
+
+function renderAnomaly(d) {
+  const el = $('#anomalyBody');
+  if (!el) return;
+  if (!d || !d.detect) { el.innerHTML = '<div class="card muted">分析失败</div>'; return; }
+  const det = d.detect, a = d.attribution || {}, st = d.state || {};
+  const f = a.fund || {}, nw = a.news || {}, pos = st.positions || {};
+
+  const lvColor = det.level >= 2 ? 'var(--up)' : (det.level >= 1 ? 'var(--accent)' : 'var(--fg2)');
+
+  // 第 0 层
+  const lvBox = `<div class="card">
+    <div class="card-head">
+      <h3>${esc(d.name)} <span class="muted">${esc(d.symbol)}</span></h3>
+      <span class="${(d.pct_change || 0) >= 0 ? 'up' : 'down'}">${fmtNum(d.price)} ${fmtPct(d.pct_change)}</span>
+    </div>
+    <div class="kv-list">
+      <div class="kv"><span class="k">异动判定</span><span class="v">
+        <b style="color:${lvColor}">${esc(det.level_name)}</b>
+        ${det.is_anomaly ? '' : '（未达到异动阈值）'}</span></div>
+      <div class="kv"><span class="k">波动率倍数</span><span class="v">
+        ${det.z_score === null ? '—' : det.z_score} 倍（日常波动 ${det.daily_vol_pct}%）</span></div>
+      <div class="kv"><span class="k">量比 / 振幅</span><span class="v">
+        ${det.vol_ratio === null ? '—' : det.vol_ratio} 倍 / ${det.amplitude === null ? '—' : det.amplitude + '%'}</span></div>
+      <div class="kv"><span class="k">触发条件</span><span class="v">
+        ${(det.reasons || []).length ? esc(det.reasons.join('；')) : '无'}</span></div>
+    </div>
+    <div class="muted mt-sm" style="font-size:11px">
+      判定基准是<b>这只股票自己的历史波动</b>，不是固定百分比 ——
+      日常波动 3% 的票涨 3% 很平常，日常波动 0.5% 的票涨 3% 才是真异动。
+    </div>
+  </div>`;
+
+  // 第 1 层
+  const peers = a.peers || [];
+  const attrBox = `<div class="card">
+    <h3>已发生 · 逐维对照</h3>
+    <div class="muted mt-sm" style="font-size:12px">
+      每一维单独算、<b>不合并</b> —— 含义不同，合并就丢信息。
+    </div>
+    <div class="mt">
+      ${anomBar('本股', det.pct_change, 6)}
+      ${anomBar(a.bench ? a.bench.name : '大盘', a.bench ? a.bench.pct : null, 6)}
+      ${anomBar('同业中位', a.peer_median, 6)}
+    </div>
+    <div class="kv-list mt">
+      <div class="kv"><span class="k">大盘（${esc((a.bench || {}).name || '—')}）</span><span class="v">
+        ${fmtPct((a.bench || {}).pct)} → 本股超额 <b>${fmtPct(a.excess_vs_bench)}</b></span></div>
+      <div class="kv"><span class="k">板块（同业 ${peers.length} 家）</span><span class="v">
+        中位 ${fmtPct(a.peer_median)}（${a.peers_up || 0}/${a.peers_total || 0} 家上涨）
+        → 本股超额 <b>${fmtPct(a.excess_vs_peers)}</b></span></div>
+      <div class="kv"><span class="k">资金（${esc(f.source || '—')}口径）</span><span class="v">
+        <b>${esc(f.trend || '—')}</b>　今日 ${fmtMoney2(f.today)}　5日 ${fmtMoney2(f.sum5)}　20日 ${fmtMoney2(f.sum20)}</span></div>
+      <div class="kv"><span class="k">位置（多区间）</span><span class="v">
+        60日 ${fn(pos.pct_60)}% · 120日 ${fn(pos.pct_120)}% · 250日 ${fn(pos.pct_250)}%</span></div>
+      <div class="kv"><span class="k">消息面</span><span class="v">
+        今日公告 ${(nw.today_announcements || []).length} 条 ·
+        盘中新闻 ${(nw.intraday_news || []).length} 条 ·
+        收盘后 ${(nw.after_close_news || []).length} 条</span></div>
+    </div>
+    ${(nw.today_announcements || []).length || (nw.today_news || []).length ? `
+      <h3 class="mt" style="font-size:13px">今日消息时间线</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>时间</th><th>类型</th><th>标题</th></tr></thead><tbody>
+        ${(nw.today_announcements || []).map(x => `<tr><td>公告日</td><td>公告</td>
+          <td>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}</td></tr>`).join('')}
+        ${(nw.today_news || []).map(x => {
+          const t = String(x.time || '').slice(11, 16);
+          const after = t && t >= '15:00';
+          return `<tr><td>${esc(t)}${after ? ' <span class="muted">(盘后)</span>' : ''}</td>
+            <td>${esc(x.source || '新闻')}</td>
+            <td>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}</td></tr>`;
+        }).join('')}
+        </tbody></table></div>
+      <div class="warn-box mt" style="font-size:12px">
+        <b>重要</b>：这些是「时间上落在同一天」的消息，<b>不等于原因</b>。
+        收盘后发布的新闻（标了「盘后」）<b>解释不了盘中那波走势</b> ——
+        本系统只报事实和时间，不做「股价涨是因为这条消息」的因果断言。
+      </div>` : `
+      <div class="muted mt" style="font-size:12px">今天没有公告和新闻。</div>`}
+    ${(nw.errors || []).length ? `<div class="muted mt-sm" style="font-size:11px">
+      消息面部分失败：${esc((nw.errors || []).join('；'))}</div>` : ''}
+  </div>`;
+
+  // 第 2 层
+  const cond = st.condition || {};
+  const stateBox = `<div class="card">
+    <h3>正在发生 · 状态判定</h3>
+    <div class="kv-list mt">
+      <div class="kv"><span class="k">阶段</span><span class="v"><b>${esc(st.phase || '—')}</b>
+        （MA60 近20日 ${st.ma && st.ma.ma60_slope_20d !== null ? fmtPct(st.ma.ma60_slope_20d) : '—'}）</span></div>
+      <div class="kv"><span class="k">资金</span><span class="v">${esc(st.funding || '—')}
+        （强度 ${f.intensity_20 === undefined ? '—' : f.intensity_20}）</span></div>
+      <div class="kv"><span class="k">位置</span><span class="v">${esc(st.position_scope || '')} ${esc(st.position || '—')}
+        （${fn(st.position_pct)}%）</span></div>
+      <div class="kv"><span class="k">量价配合</span><span class="v">${esc(st.volume_price || '—')}
+        / ${esc(st.fund_direction || '—')}</span></div>
+    </div>
+    ${st.volume_note ? `<div class="muted mt-sm" style="font-size:12px">量价：${esc(st.volume_note)}</div>` : ''}
+    <div class="warn-box mt">
+      <b>【${esc(cond.title || '')}】</b><br>
+      <span style="font-size:13px">${mdInline(cond.meaning || '')}</span>
+    </div>
+    <div class="muted mt-sm" style="font-size:11px">
+      这一条不是评分算出来的，而是「阶段 × 资金 × 位置」的条件组合查表得到的。
+      同样的形态在不同资金和位置下含义相反，所以这里不用加权求和。
+    </div>
+  </div>`;
+
+  el.innerHTML = lvBox + attrBox + stateBox + `
+    <div class="card"><div class="warn-box">
+      <span style="font-size:12px">${mdInline(d.disclaimer)}</span></div></div>`;
+}
+
+const fn = (v) => (v === null || v === undefined ? '—' : v);
+const fmtMoney2 = (v) => {
+  if (v === null || v === undefined) return '—';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return (n >= 0 ? '+' : '') + (n / 1e8).toFixed(2) + ' 亿';
+};
+
+async function runAnomaly(sym) {
+  const el = $('#anomalyBody');
+  if (!sym) { toast('请先输入标的', 'err'); return; }
+  if (el) el.innerHTML = '<div class="card muted">分析中…</div>';
+  try {
+    const d = await api('/anomaly/' + encodeURIComponent(sym));
+    S.anomalyData = d;
+    renderAnomaly(d);
+    setHash('anomaly', sym);
+  } catch (e) {
+    if (el) el.innerHTML = `<div class="card muted">分析失败：${esc(e.message)}</div>`;
+  }
+}
+
 function bind() {
   $('#tabs').onclick = (e) => {
     const t = e.target.closest('.tab');
@@ -1959,6 +2121,16 @@ function bind() {
     if (b) loadMovers(b.dataset.kind);
   };
 
+  const anomalyBtn = $('#detailAnomalyBtn');
+  if (anomalyBtn) {
+    anomalyBtn.onclick = () => {
+      if (!S.detailSymbol) { toast('请先查询一只股票', 'err'); return; }
+      if ($('#anomalySymbol')) $('#anomalySymbol').value = S.detailSymbol;
+      showView('anomaly');
+      runAnomaly(S.detailSymbol);
+    };
+  }
+
   const flowBtn = $('#detailFlowBtn');
   if (flowBtn) {
     flowBtn.onclick = () => {
@@ -1968,6 +2140,15 @@ function bind() {
       runFlow(S.detailSymbol);
     };
   }
+
+  $('#anomalyRunBtn').onclick = () => {
+    runAnomaly(($('#anomalySymbol').value || '').trim().toUpperCase());
+  };
+  $('#anomalySymbol').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      runAnomaly(($('#anomalySymbol').value || '').trim().toUpperCase());
+    }
+  });
 
   $('#flowRunBtn').onclick = () => {
     const v = ($('#flowSymbol').value || '').trim().toUpperCase();

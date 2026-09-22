@@ -181,6 +181,17 @@ check_has "A股已接入主营构成"   '东财 F10 经营分析' "$BASE/api/flo
 check_has "A股已接入行业对比"   'F10 行业分析' "$BASE/api/flow/002241.SZ"
 check_has "A股已接入增减持"     '高管持股变动' "$BASE/api/flow/002241.SZ"
 check "ETF 全流程不崩"          200 "$BASE/api/flow/510300.SH"
+
+echo
+echo "── 异动归因 ──"
+check "异动分析正常"        200 "$BASE/api/anomaly/002241.SZ"
+check "异动+非法标的"       400 "$BASE/api/anomaly/BOGUS"
+check "异动+ETF"            200 "$BASE/api/anomaly/510300.SH"
+check "异动+港股"           200 "$BASE/api/anomaly/00700.HK"
+check "异动关消息面"        200 "$BASE/api/anomaly/002241.SZ?news=0"
+check_has "返回异动判定"    '"detect"' "$BASE/api/anomaly/002241.SZ"
+check_has "返回归因分层"    '"attribution"' "$BASE/api/anomaly/002241.SZ"
+check_has "返回状态与条件"  '"condition"' "$BASE/api/anomaly/002241.SZ"
 check_has "数据包含提示词原文" \
   '请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。' \
   "$BASE/api/flow/002241.SZ/pack"

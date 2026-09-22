@@ -504,3 +504,117 @@ def full_snapshot(
             "complete": not failed_pages,
         })
     return all_rows
+
+
+def fund_flow(symbol: str, limit: int = 120, budget: float = 2.5) -> list[dict]:
+    """资金流向历史（日频）。
+
+    返回 [{date, main, small, mid, large, xlarge}]，单位元，正为净流入。
+
+    字段口径（东财 daykline 接口的 f51~f56）：
+        f51 日期, f52 主力净流入, f53 小单, f54 中单, f55 大单, f56 超大单
+    主力 = 大单 + 超大单，这里直接用 f52，不自算。
+
+    ⚠️ 这个接口在 push2his 域名族上，和 K线同一个族 —— 实测该族会被限流，
+    所以走主机池轮换（PUSH2HIS_POOL），不要直连单台主机。
+    """
+    secid = to_eastmoney(symbol)
+    # 必须给死线：push2his 主机池有 12 台，整族被限流时要试完每一台才失败 ——
+    # 实测裸调用要 **14 秒**。而我们有新浪兜底，没必要在这里干等。
+    import time as _time
+    data = fetch_json_rotating(
+        "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+        PUSH2HIS_POOL,
+        deadline=_time.monotonic() + budget,
+        params={
+            "secid": secid,
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+            "klt": "101", "lmt": "0",
+        },
+        headers=HEADERS, timeout=15, cache_ttl=settings.kline_cache_ttl,
+    )
+    klines = ((data.get("data") or {}).get("klines")) or []
+    out: list[dict] = []
+    for row in klines:
+        parts = str(row).split(",")
+        if len(parts) < 6:
+            continue
+        out.append({
+            "date": parts[0],
+            "main": to_float(parts[1]),      # 主力净流入 = 大单 + 超大单
+            "small": to_float(parts[2]),
+            "mid": to_float(parts[3]),
+            "large": to_float(parts[4]),
+            "xlarge": to_float(parts[5]),
+            "source": "eastmoney",
+        })
+    return out[-limit:] if limit else out
+
+
+def _sina_fund_flow(symbol: str, limit: int = 120) -> list[dict]:
+    """新浪资金流向（兜底）。
+
+    只在东财 push2his 整族被限流时用。口径和东财**不完全一样**：
+    新浪给的是 `netamount`（全单净额）和 `r0_net`（特大单净额），
+    没有「主力 = 大单 + 超大单」这个合并口径。所以这里如实分列，
+    由上层标注来源，不假装两个数是一回事。
+    """
+    from .base import fetch_text
+    code = symbol.split(".")[0]
+    prefix = "sh" if symbol.upper().endswith((".SH", ".BJ")) else "sz"
+    text = fetch_text(
+        "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        "MoneyFlow.ssl_qsfx_zjlrqs",
+        params={"page": "1", "num": str(max(60, min(limit, 120))),
+                "sort": "opendate", "asc": "0", "daima": f"{prefix}{code}"},
+        headers={"Referer": "https://finance.sina.com.cn/"},
+        retries=2, timeout=15, cache_ttl=settings.kline_cache_ttl,
+    )
+    import json
+    try:
+        rows = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise FetchError(f"新浪资金流解析失败: {text[:120]}") from exc
+    out = []
+    for r in rows or []:
+        out.append({
+            "date": str(r.get("opendate") or ""),
+            "main": to_float(r.get("netamount")),      # 全单净额
+            "xlarge": to_float(r.get("r0_net")),       # 特大单净额
+            "pct": to_float(r.get("changeratio")),
+            "source": "sina",
+        })
+    out.sort(key=lambda x: x["date"])
+    return out[-limit:] if limit else out
+
+
+# 东财资金流失败后的冷却截止时间。
+# 没有这个的话，每次请求都要先白试 2.5 秒东财（它现在整族被限流），
+# 而新浪明明 0.27 秒就能给。加冷却后，被限流期间直接走新浪。
+_FF_DEAD_UNTIL = 0.0
+_FF_COOLDOWN = 300.0
+
+
+def fund_flow_any(symbol: str, limit: int = 120) -> list[dict]:
+    """取资金流向历史：东财优先，被限流时退到新浪。"""
+    global _FF_DEAD_UNTIL
+    import time as _time
+    if _time.monotonic() < _FF_DEAD_UNTIL:
+        try:
+            return _sina_fund_flow(symbol, limit)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("新浪资金流失败 %s: %s", symbol, exc)
+            return []
+    try:
+        rows = fund_flow(symbol, limit)
+        if rows:
+            return rows
+    except Exception as exc:  # noqa: BLE001
+        _FF_DEAD_UNTIL = _time.monotonic() + _FF_COOLDOWN
+        _logger.info("东财资金流失败，改用新浪（冷却 %.0f 秒）: %s", _FF_COOLDOWN, exc)
+    try:
+        return _sina_fund_flow(symbol, limit)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("资金流向全部来源失败 %s: %s", symbol, exc)
+        return []

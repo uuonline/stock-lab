@@ -13,6 +13,7 @@ from ..config import settings
 from ..services import ai as ai_svc
 from ..services import alerts as alert_svc
 from ..services import backtest as bt_svc
+from ..services import anomaly as anomaly_svc
 from ..services import box as box_svc
 from ..services import flow as flow_svc
 from ..services import indicators as ta
@@ -671,3 +672,19 @@ def get_flow_pack(symbol: str) -> dict:
     except FetchError as exc:
         raise HTTPException(503, str(exc)) from exc
     return {"symbol": sym, "chars": len(text), "text": text}
+
+
+@router.get("/anomaly/{symbol}")
+def get_anomaly(symbol: str, news: int = Query(1, ge=0, le=1)) -> dict:
+    """异动归因：发生了什么 / 正在发生什么 / 什么条件下会怎样。
+
+    用条件树而不是加权评分 —— 同样的形态在不同资金和位置下含义相反。
+    """
+    try:
+        sym = normalize(symbol)
+    except SymbolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        return anomaly_svc.analyze(sym, with_news=bool(news))
+    except FetchError as exc:
+        raise HTTPException(503, str(exc)) from exc

@@ -123,7 +123,7 @@ function bad(name, detail) {
   const tabs = $$('.tab').map(t => t.dataset.view);
   // 不写死数量：加栏目是正常迭代，写死会变成每次都要改测试。
   // 真正要保证的是「必有的几个栏目都在」+「每个标签都有对应视图」。
-  const mustHave = ['dashboard', 'watchlist', 'detail', 'screener', 'flow', 'backtest', 'alerts', 'settings'];
+  const mustHave = ['dashboard', 'watchlist', 'detail', 'screener', 'flow', 'anomaly', 'backtest', 'alerts', 'settings'];
   const missing = mustHave.filter(v => !tabs.includes(v));
   missing.length === 0 ? ok('标签页渲染齐全', tabs.join(','))
                        : bad('缺少栏目', missing.join(','));
@@ -563,6 +563,39 @@ function bad(name, detail) {
       // 提示词原文必须一字不改
       ft.includes('请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。')
         ? ok('提示词原文完整保留') : bad('提示词原文被改动');
+    }
+  }
+
+  // ---- 异动归因栏目 ----
+  {
+    const tabA = window.document.querySelector('.tab[data-view="anomaly"]');
+    tabA ? ok('存在「异动」标签') : bad('缺少异动标签');
+    if (tabA) {
+      tabA.click();
+      await sleep(300);
+      $('#anomalySymbol').value = '002241.SZ';
+      $('#anomalyRunBtn').click();
+      await waitFor(() => $('#anomalyBody').textContent.includes('异动判定'), 150000)
+        ? ok('异动分析已渲染') : bad('异动分析未渲染');
+
+      const at = $('#anomalyBody').textContent;
+      // 三层结构都要在
+      at.includes('已发生') ? ok('第一层：已发生（逐维对照）') : bad('缺少归因层');
+      at.includes('正在发生') ? ok('第二层：正在发生（状态）') : bad('缺少状态层');
+      at.includes('异动判定') ? ok('第零层：异动判定') : bad('缺少异动判定');
+
+      // 四个归因维度
+      const dims = ['大盘', '板块', '资金', '位置', '消息面'];
+      const miss = dims.filter(x => !at.includes(x));
+      miss.length === 0 ? ok('五个归因维度齐全') : bad('缺归因维度', miss.join(','));
+
+      // 关键：不能只有加权分数，必须有条件组合的判定
+      at.includes('条件组合查表') ? ok('用条件树判定（非加权）') : bad('缺少条件树判定');
+      at.includes('不构成投资建议') ? ok('异动栏目带免责声明') : bad('缺少免责声明');
+
+      // 消息面必须声明「时间吻合 ≠ 因果」
+      at.includes('不等于原因') || at.includes('时间上落在同一天')
+        ? ok('消息面声明了相关≠因果') : bad('消息面未声明因果边界');
     }
   }
 

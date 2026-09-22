@@ -29,6 +29,7 @@
   <button class="tab" data-view="detail">个股</button>
   <button class="tab" data-view="screener">选股</button>
   <button class="tab" data-view="flow">AI 全流程</button>
+  <button class="tab" data-view="anomaly">异动</button>
   <button class="tab" data-view="backtest">回测</button>
   <button class="tab" data-view="alerts">提醒</button>
   <button class="tab" data-view="settings">设置</button>
@@ -92,6 +93,7 @@
         <input id="detailInput" placeholder="输入代码或名称后回车，如 600519.SH" autocomplete="off">
         <button class="btn primary" id="detailGoBtn">查询</button>
         <button class="btn" id="detailFlowBtn" title="对这一只做 6 步 13 项全流程分析">AI 全流程</button>
+        <button class="btn" id="detailAnomalyBtn" title="今天有没有异动、为什么">异动归因</button>
       </div>
       <div id="detailSuggest" class="suggest"></div>
     </div>
@@ -250,6 +252,29 @@
     </div>
     <div id="flowSummary"></div>
     <div id="flowSteps"></div>
+  </section>
+
+
+  <!-- ========== 异动归因 ========== -->
+  <section class="view" id="view-anomaly">
+    <div class="card">
+      <div class="card-head">
+        <h3>异动归因</h3>
+        <button class="btn" id="anomalyRunBtn">分析</button>
+      </div>
+      <p class="muted mt-sm">
+        分三层：<b>发生了什么</b>（大盘 / 板块 / 资金 / 位置 / 消息时间线逐维对照）、
+        <b>正在发生什么</b>（阶段 + 资金 + 位置 + 量能 → 状态）、
+        <b>什么条件下会怎样</b>（触发条件与失效位）。
+        这里<b>不做加权的综合评分</b> —— 加权会把矛盾信号抹平，
+        而「基本面差 + 资金猛进 + 位置在箱底」和「基本面好 + 资金流出 + 位置在箱顶」
+        的风险收益完全相反，必须分开看。
+      </p>
+      <div class="form-grid mt">
+        <label>标的 <input id="anomalySymbol" placeholder="002241.SZ"></label>
+      </div>
+    </div>
+    <div id="anomalyBody"></div>
   </section>
 
   <!-- ========== 设置 ========== -->
