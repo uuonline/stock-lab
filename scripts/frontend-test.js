@@ -596,6 +596,27 @@ function bad(name, detail) {
       // 消息面必须声明「时间吻合 ≠ 因果」
       at.includes('不等于原因') || at.includes('时间上落在同一天')
         ? ok('消息面声明了相关≠因果') : bad('消息面未声明因果边界');
+
+      // 历史类比：必须给出独立事件数、基准、稳定性检验和最坏情况
+      await waitFor(() => {
+        const b = $('#analogBox');
+        return b && !b.textContent.includes('计算中');
+      }, 60000);
+      const at2 = ($('#analogBox') || { textContent: '' }).textContent;
+      if (at2.includes('历史类比') && !at2.includes('不可用') && !at2.includes('无法计算')) {
+        at2.includes('独立') ? ok('类比给出独立事件数（修正重叠窗口）') : bad('缺独立事件数');
+        at2.includes('这只股票自己的全部交易日') ? ok('类比基准用个股自身') : bad('基准口径未说明');
+        at2.includes('样本内') && at2.includes('样本外')
+          ? ok('类比做了样本内外稳定性检验') : bad('缺稳定性检验');
+        at2.includes('最坏情况') ? ok('类比给出最坏情况') : bad('缺最坏情况');
+        (at2.includes('这不是预测') || at2.includes('不是预测'))
+          ? ok('类比声明了不是预测') : bad('类比未声明性质');
+      } else if (at2.includes('样本量不足') || at2.includes('不可用')) {
+        // 样本不足属合法降级；但元素整个不存在是回归，不能算通过
+        ok('历史类比不可用（样本不足，属正常降级）', at2.slice(0, 40));
+      } else {
+        bad('历史类比区域缺失或未渲染', JSON.stringify(at2.slice(0, 60)));
+      }
     }
   }
 

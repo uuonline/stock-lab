@@ -192,6 +192,16 @@ check "异动关消息面"        200 "$BASE/api/anomaly/002241.SZ?news=0"
 check_has "返回异动判定"    '"detect"' "$BASE/api/anomaly/002241.SZ"
 check_has "返回归因分层"    '"attribution"' "$BASE/api/anomaly/002241.SZ"
 check_has "返回状态与条件"  '"condition"' "$BASE/api/anomaly/002241.SZ"
+
+echo
+echo "── 历史类比 ──"
+check "历史类比正常"        200 "$BASE/api/analogs/002241.SZ"
+check "类比+非法标的"       400 "$BASE/api/analogs/BOGUS"
+check "类比+样本少的标的"   200 "$BASE/api/analogs/000001.SH"
+check_has "类比返回持有期"  '"horizons"' "$BASE/api/analogs/002241.SZ"
+check_has "类比返回独立事件数" '"independent"' "$BASE/api/analogs/002241.SZ"
+check_has "类比返回样本内外" '"out_sample"' "$BASE/api/analogs/002241.SZ"
+check_has "类比声明非预测"  '不是预测' "$BASE/api/analogs/002241.SZ"
 check_has "数据包含提示词原文" \
   '请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。' \
   "$BASE/api/flow/002241.SZ/pack"

@@ -2082,9 +2082,13 @@ function renderAnomaly(d) {
     </div>
   </div>`;
 
-  el.innerHTML = lvBox + attrBox + stateBox + `
+  el.innerHTML = lvBox + attrBox + stateBox + '<div id="analogBox"></div>' + `
     <div class="card"><div class="warn-box">
       <span style="font-size:12px">${mdInline(d.disclaimer)}</span></div></div>`;
+
+  // 历史类比单独请求：读本地库很快（约 0.1s），
+  // 和异动分析解耦后互不拖累，失败也不影响主分析。
+  loadAnalogs(d.symbol);
 }
 
 const fn = (v) => (v === null || v === undefined ? '—' : v);
@@ -2106,6 +2110,98 @@ async function runAnomaly(sym) {
     setHash('anomaly', sym);
   } catch (e) {
     if (el) el.innerHTML = `<div class="card muted">分析失败：${esc(e.message)}</div>`;
+  }
+}
+
+
+/* ============ 历史类比 ============ */
+function renderAnalogs(d) {
+  const box = $('#analogBox');
+  if (!box) return;
+  if (!d || !d.ok) {
+    box.innerHTML = `<div class="card"><h3>历史类比</h3>
+      <div class="muted mt-sm">${esc((d && d.reason) || '无法计算')}</div></div>`;
+    return;
+  }
+  const hs = d.horizons || {};
+  const rows = ['5', '10', '20'].filter(h => hs[h] && hs[h].signal.count).map(h => {
+    const s = hs[h].signal, e = hs[h].edge_mean, ew = hs[h].edge_win;
+    return `<tr>
+      <td>${h} 日</td>
+      <td class="num">${s.count} / <b>${s.independent}</b></td>
+      <td class="num">${s.win_rate}%</td>
+      <td class="num">${s.median > 0 ? '+' : ''}${s.median}%</td>
+      <td class="num">${s.mean > 0 ? '+' : ''}${s.mean}%</td>
+      <td class="num down">${s.worst}%</td>
+      <td class="num">${s.p25}% ~ ${s.p75}%</td>
+      <td class="num ${e > 0 ? 'up' : 'down'}">${e === undefined ? '—' : (e > 0 ? '+' : '') + e + '%'}</td>
+    </tr>`;
+  }).join('');
+  const b20 = (hs['20'] || {}).baseline || {};
+  const i = (d.oos || {}).in_sample || {}, o = (d.oos || {}).out_sample || {};
+  const t = d.tail || {};
+
+  box.innerHTML = `<div class="card">
+    <div class="card-head">
+      <h3>历史类比 · 这种情形以前发生过什么</h3>
+      <span class="muted" style="font-size:12px">${esc(d.direction)} · 匹配档「${esc(d.tier)}」</span>
+    </div>
+    <div class="kv-list mt-sm">
+      <div class="kv"><span class="k">历史同类情形</span><span class="v">
+        找到 <b>${d.events}</b> 次　区间 ${esc(d.span)}</span></div>
+      <div class="kv"><span class="k">今日特征</span><span class="v">
+        z=${d.today_z} · 位置 ${esc(d.today_pos || '—')} · 阶段 ${esc(d.today_phase || '—')}</span></div>
+    </div>
+    <div class="table-wrap mt"><table>
+      <thead><tr><th>持有期</th><th>样本/独立</th><th>上涨占比</th><th>中位收益</th>
+        <th>均值</th><th>最差</th><th>中段区间</th><th>相对基准</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="muted mt-sm" style="font-size:11px">
+      「独立」是把连续触发合并后的**独立事件数** —— 连续几天异动的未来窗口大幅重叠，
+      名义样本数会高估证据量，独立事件数才是真实证据。
+      基准是<b>这只股票自己的全部交易日</b>${b20.win_rate ? `（20 日上涨占比 ${b20.win_rate}%）` : ''}，
+      不是跨股票的混合均值（那会带入选股偏差）。
+    </div>
+    ${i.count || o.count ? `
+      <h3 class="mt" style="font-size:13px">稳定性检验（20 日）</h3>
+      <div class="kv-list">
+        <div class="kv"><span class="k">样本内</span><span class="v">
+          ${i.count || 0} 次 · 上涨占比 ${i.win_rate === undefined ? '—' : i.win_rate + '%'} · 中位 ${i.median === undefined ? '—' : i.median + '%'}</span></div>
+        <div class="kv"><span class="k">样本外</span><span class="v">
+          ${o.count || 0} 次 · 上涨占比 ${o.win_rate === undefined ? '—' : o.win_rate + '%'} · 中位 ${o.median === undefined ? '—' : o.median + '%'}</span></div>
+      </div>
+      <div class="muted" style="font-size:11px">
+        两者差距越大，说明这个"优势"越可能是运气而不是规律。</div>` : ''}
+    ${t.worst !== undefined ? `
+      <h3 class="mt" style="font-size:13px">最坏情况（决定仓位与止损）</h3>
+      <div class="kv-list">
+        <div class="kv"><span class="k">最差一次</span><span class="v down">
+          ${t.worst}%（${esc(t.worst_date || '—')}）</span></div>
+        <div class="kv"><span class="k">亏损超 10% / 20%</span><span class="v">
+          ${t.loss_gt_10} 次 / ${t.loss_gt_20} 次</span></div>
+      </div>` : ''}
+    <div class="warn-box mt">
+      <span style="font-size:12px">${mdInline(d.caveat)}</span>
+    </div>
+    <div class="warn-box mt" style="border-color:var(--down)">
+      <b style="color:var(--down)">这不是预测</b>
+      <div style="font-size:12px;margin-top:4px">
+        它只说明「历史上类似情形之后实际发生过什么」。
+        单只股票的样本量通常只有十几次，<b>远不足以支撑统计结论</b> ——
+        样本内外的巨大差异就是证据。请把它当作"了解赔率"，不是"知道方向"。
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadAnalogs(sym) {
+  const box = $('#analogBox');
+  if (!box || !sym) return;
+  box.innerHTML = '<div class="card muted">历史类比计算中…</div>';
+  try {
+    renderAnalogs(await api('/analogs/' + encodeURIComponent(sym)));
+  } catch (e) {
+    box.innerHTML = `<div class="card muted">历史类比不可用：${esc(e.message)}</div>`;
   }
 }
 

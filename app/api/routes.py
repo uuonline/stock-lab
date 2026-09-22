@@ -13,6 +13,7 @@ from ..config import settings
 from ..services import ai as ai_svc
 from ..services import alerts as alert_svc
 from ..services import backtest as bt_svc
+from ..services import analogs as analogs_svc
 from ..services import anomaly as anomaly_svc
 from ..services import box as box_svc
 from ..services import flow as flow_svc
@@ -688,3 +689,28 @@ def get_anomaly(symbol: str, news: int = Query(1, ge=0, le=1)) -> dict:
         return anomaly_svc.analyze(sym, with_news=bool(news))
     except FetchError as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+@router.get("/analogs/{symbol}")
+def get_analogs(symbol: str) -> dict:
+    """历史类比：这种情形以前发生过什么。
+
+    回答「历史上出现类似异动后，5/10/20 个交易日实际发生了什么」——
+    是历史统计，不是预测。同时给出独立事件数、样本内外对比和最坏情况。
+    """
+    try:
+        sym = normalize(symbol)
+    except SymbolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        from ..services import flow as flow_svc
+        bars = flow_svc.long_history(sym, 1300)
+    except FetchError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if not bars:
+        raise HTTPException(404, f"无 K线数据: {sym}")
+    try:
+        return analogs_svc.analyze(sym, bars)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("历史类比失败 %s: %s", sym, exc)
+        return {"ok": False, "reason": f"历史类比计算失败: {exc}"}
