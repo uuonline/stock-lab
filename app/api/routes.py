@@ -857,6 +857,27 @@ def create_trade(body: TradeIn) -> dict:
         raise HTTPException(400, str(exc)) from exc
 
 
+class TradePatch(BaseModel):
+    stop_price: float | None = Field(default=None, gt=0)
+    target_price: float | None = Field(default=None, gt=0)
+    shares: float | None = Field(default=None, ge=0)
+    reason: str | None = None
+    note: str | None = None
+
+
+@router.patch("/trades/{trade_id}")
+def patch_trade(trade_id: int, body: TradePatch) -> dict:
+    """补填或移动止损/目标。改动会**同步重建关联提醒** ——
+    否则提醒还盯着旧价位，等于没有保护。"""
+    r = trade_svc.update_trade(
+        trade_id, body.stop_price, body.target_price, body.shares,
+        body.reason, body.note,
+    )
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("reason") or "修改失败")
+    return r
+
+
 @router.post("/trades/{trade_id}/close")
 def close_trade(trade_id: int, body: CloseIn) -> dict:
     r = trade_svc.close_trade(trade_id, body.exit_price, body.exit_date, body.note)

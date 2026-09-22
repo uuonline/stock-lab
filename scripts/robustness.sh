@@ -252,6 +252,36 @@ check "下单清单不含自选"      200 "$BASE/api/order-sheet?watchlist=0"
 check "下单清单参数越界"      422 "$BASE/api/order-sheet?watchlist=9"
 check_has "清单含免责边界"    '不接券商' "$BASE/api/order-sheet"
 
+# 补填/移动止损：必须同步重建提醒，否则提醒还盯旧价位
+PATCH_TEST() {
+  local tid n
+  tid=$(curl -s -m 60 -X POST "$BASE/api/trades" -H 'Content-Type: application/json' \
+        -d '{"symbol":"002241.SZ","entry_price":24.64,"shares":100,"reason":"补填自检"}' \
+        | python3 -c 'import json,sys;print(json.load(sys.stdin).get("id",""))' 2>/dev/null)
+  [ -z "$tid" ] && { printf "  \033[31m✗\033[0m %-38s 开仓失败\n" "补填止损建提醒"; FAIL=$((FAIL+1)); return; }
+  curl -s -m 60 -X PATCH "$BASE/api/trades/$tid" -H 'Content-Type: application/json' \
+       -d '{"stop_price":22.94,"target_price":25.94}' >/dev/null
+  n=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); rows=d.get('alerts') or d.get('rows') or []
+print(len([a for a in rows if a.get('trade_id')==$tid]))" 2>/dev/null || echo 0)
+  [ "$n" = "2" ] && { printf "  \033[32m✓\033[0m %-38s 2 条\n" "补填止损自动建提醒"; PASS=$((PASS+1)); } \
+                || { printf "  \033[31m✗\033[0m %-38s %s 条\n" "补填止损自动建提醒" "$n"; FAIL=$((FAIL+1)); }
+  curl -s -m 60 -X PATCH "$BASE/api/trades/$tid" -H 'Content-Type: application/json' \
+       -d '{"stop_price":23.50}' >/dev/null
+  n=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); rows=d.get('alerts') or d.get('rows') or []
+print(len([a for a in rows if a.get('trade_id')==$tid]))" 2>/dev/null || echo 0)
+  [ "$n" = "2" ] && { printf "  \033[32m✓\033[0m %-38s 仍 2 条（无重复）\n" "移动止损重建提醒"; PASS=$((PASS+1)); } \
+                || { printf "  \033[31m✗\033[0m %-38s %s 条\n" "移动止损重建提醒" "$n"; FAIL=$((FAIL+1)); }
+  curl -s -m 30 -X DELETE "$BASE/api/trades/$tid" >/dev/null
+}
+PATCH_TEST
+
+check "止损高于成本被拒"      400 "$BASE/api/trades/999999" -X PATCH \
+      -H 'Content-Type: application/json' -d '{"stop_price":30}'
+
 TRADE_ALERT_TEST() {
   local tid aid_before aid_after
   aid_before=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d.get("alerts") or d.get("rows") or []))' 2>/dev/null || echo 0)
@@ -303,6 +333,36 @@ check "下单清单"              200 "$BASE/api/order-sheet"
 check "下单清单不含自选"      200 "$BASE/api/order-sheet?watchlist=0"
 check "下单清单参数越界"      422 "$BASE/api/order-sheet?watchlist=9"
 check_has "清单含免责边界"    '不接券商' "$BASE/api/order-sheet"
+
+# 补填/移动止损：必须同步重建提醒，否则提醒还盯旧价位
+PATCH_TEST() {
+  local tid n
+  tid=$(curl -s -m 60 -X POST "$BASE/api/trades" -H 'Content-Type: application/json' \
+        -d '{"symbol":"002241.SZ","entry_price":24.64,"shares":100,"reason":"补填自检"}' \
+        | python3 -c 'import json,sys;print(json.load(sys.stdin).get("id",""))' 2>/dev/null)
+  [ -z "$tid" ] && { printf "  \033[31m✗\033[0m %-38s 开仓失败\n" "补填止损建提醒"; FAIL=$((FAIL+1)); return; }
+  curl -s -m 60 -X PATCH "$BASE/api/trades/$tid" -H 'Content-Type: application/json' \
+       -d '{"stop_price":22.94,"target_price":25.94}' >/dev/null
+  n=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); rows=d.get('alerts') or d.get('rows') or []
+print(len([a for a in rows if a.get('trade_id')==$tid]))" 2>/dev/null || echo 0)
+  [ "$n" = "2" ] && { printf "  \033[32m✓\033[0m %-38s 2 条\n" "补填止损自动建提醒"; PASS=$((PASS+1)); } \
+                || { printf "  \033[31m✗\033[0m %-38s %s 条\n" "补填止损自动建提醒" "$n"; FAIL=$((FAIL+1)); }
+  curl -s -m 60 -X PATCH "$BASE/api/trades/$tid" -H 'Content-Type: application/json' \
+       -d '{"stop_price":23.50}' >/dev/null
+  n=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); rows=d.get('alerts') or d.get('rows') or []
+print(len([a for a in rows if a.get('trade_id')==$tid]))" 2>/dev/null || echo 0)
+  [ "$n" = "2" ] && { printf "  \033[32m✓\033[0m %-38s 仍 2 条（无重复）\n" "移动止损重建提醒"; PASS=$((PASS+1)); } \
+                || { printf "  \033[31m✗\033[0m %-38s %s 条\n" "移动止损重建提醒" "$n"; FAIL=$((FAIL+1)); }
+  curl -s -m 30 -X DELETE "$BASE/api/trades/$tid" >/dev/null
+}
+PATCH_TEST
+
+check "止损高于成本被拒"      400 "$BASE/api/trades/999999" -X PATCH \
+      -H 'Content-Type: application/json' -d '{"stop_price":30}'
 
 TRADE_ALERT_TEST
 check_has "数据包含提示词原文" \

@@ -762,3 +762,69 @@ def plan(symbol: str, capital: float | None = None, risk_pct: float | None = Non
                  "取决于你能承受多大回撤** —— 距离越远仓位越小、越不容易被日常波动打掉；"
                  "距离越近仓位越大、但更容易被洗出去。这里只给依据和后果。"),
     }
+
+
+def update_trade(trade_id: int, stop_price: float | None = None,
+                 target_price: float | None = None, shares: float | None = None,
+                 reason: str | None = None, note: str | None = None,
+                 refresh_alerts: bool = True) -> dict[str, Any]:
+    """改一笔持仓的止损/目标/股数。
+
+    两个用途：
+      1. 开仓时忘了填止损目标，事后补上（否则不会有任何提醒在盯）
+      2. **移动止损** —— 股价涨上去之后把止损上移，这是常规操作
+
+    改止损/目标时必须**同步更新关联提醒**，否则提醒还盯着旧价位，
+    等于没有保护。所以这里先清掉旧的、再按新价位重建。
+    """
+    row = db.query_one("SELECT * FROM trades WHERE id=?", (trade_id,))
+    if not row:
+        return {"ok": False, "reason": "找不到该交易"}
+    if row["status"] != "open":
+        return {"ok": False, "reason": "已平仓的交易不能再改"}
+
+    e = _f(row["entry_price"]) or 0
+    sets: list[str] = []
+    vals: list[Any] = []
+    new_stop = _f(stop_price) if stop_price is not None else _f(row["stop_price"])
+    new_tgt = _f(target_price) if target_price is not None else _f(row["target_price"])
+
+    if stop_price is not None:
+        if new_stop is not None and e and new_stop >= e:
+            return {"ok": False,
+                    "reason": f"止损价 {new_stop} 不低于成本 {e} —— "
+                              f"移动止损可以上移，但不能高过成本（那是止盈，不是止损）"}
+        sets.append("stop_price=?"); vals.append(new_stop)
+    if target_price is not None:
+        if new_tgt is not None and e and new_tgt <= e:
+            return {"ok": False, "reason": f"目标价 {new_tgt} 不高于成本 {e}"}
+        sets.append("target_price=?"); vals.append(new_tgt)
+    if shares is not None:
+        sh = _f(shares)
+        if sh is None or sh < 0:
+            return {"ok": False, "reason": "股数必须是非负数"}
+        sets.append("shares=?"); vals.append(sh)
+    if reason is not None:
+        sets.append("reason=?"); vals.append(reason)
+    if note is not None:
+        sets.append("note=?"); vals.append(note)
+
+    if not sets:
+        return {"ok": False, "reason": "没有要修改的字段"}
+
+    vals.append(trade_id)
+    db.execute(f"UPDATE trades SET {', '.join(sets)} WHERE id=?", tuple(vals))
+
+    removed = 0
+    made: list[dict] = []
+    if refresh_alerts:
+        try:
+            from . import alerts as alert_svc
+            removed = alert_svc.delete_alerts_for_trade(trade_id)
+            made = _create_plan_alerts(trade_id, row["symbol"], row["name"],
+                                       new_stop, new_tgt)
+        except Exception as exc:  # noqa: BLE001
+            _swallow(exc, f"update_trade 提醒同步 {trade_id}")
+    return {"ok": True, "id": trade_id, "alerts_removed": removed, "alerts": made}
+
+
