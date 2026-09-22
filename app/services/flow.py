@@ -29,6 +29,7 @@ import logging
 import math
 from typing import Any
 
+from ..sources import eastmoney_f10 as f10
 from ..sources import market
 from . import box as box_svc
 from . import indicators as ta
@@ -644,10 +645,10 @@ PROMPTS: list[dict[str, Any]] = [
     # ---- 第一步 ----
     {"id": "p1", "step": 1, "title": "商业模式与收入来源",
      "prompt": "请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。",
-     "status": "no_data"},
+     "status": "grounded"},
     {"id": "p2", "step": 1, "title": "行业竞争对手",
      "prompt": "请列出这家公司在行业中的前三大竞争对手，并说明每家公司的核心优势分别是什么。",
-     "status": "no_data"},
+     "status": "partial"},
     {"id": "p3", "step": 1, "title": "近三年营收与净利趋势",
      "prompt": "请分析这家公司近三年的营收和净利润变化趋势，按年份列出具体数字并计算每年的增速。",
      "status": "grounded"},
@@ -659,7 +660,7 @@ PROMPTS: list[dict[str, Any]] = [
     {"id": "p5", "step": 2, "title": "市净率与净资产收益率对比",
      "prompt": ("请将这支股票的市净率和净资产收益率与同行业另外两家龙头公司进行对比"
                 "并给出简单的结论。"),
-     "status": "partial"},
+     "status": "grounded"},
     {"id": "p6", "step": 2, "title": "估值与成长性是否匹配",
      "prompt": ("请结合公司最近三年的营收增速判断当前估值水平是否匹配他的成长性，"
                 "如果匹配就说匹配，不匹配就说不匹配。"),
@@ -676,7 +677,7 @@ PROMPTS: list[dict[str, Any]] = [
     {"id": "p9", "step": 3, "title": "大股东与高管增减持",
      "prompt": ("请分析这只股票过去一年内大股东和高管的增减持情况，"
                 "并告诉我整体是净买入还是净卖出。"),
-     "status": "no_data"},
+     "status": "grounded"},
     # ---- 第四步 ----
     {"id": "p10", "step": 4, "title": "均线位置与通道",
      "prompt": ("请用均线系统分析这只股票当前股价位于五日线、20 日线和 60 日线的什么位置，"
@@ -708,24 +709,12 @@ STEP_TITLES = {
 
 # 无数据提示词的建议来源
 NO_DATA_HINT = {
-    "p1": ("公司业务与主营构成属于公司公告信息。本系统不接这类文本数据源，"
-           "因为靠抓取拼出来的业务描述往往过时或错配，不如让用户直接看原始公告。",
-           ["巨潮资讯网（cninfo.com.cn）公司年报「业务概要」章节",
-            "公司官网「关于我们」",
-            "把公司名称直接丢给 AI 问答，这类通用信息 AI 是可靠的"]),
-    "p2": ("本系统没有行业分类与同业数据库，无法判断谁是「龙头」。"
-           "我们不猜 —— 猜出来的竞争对手会直接带偏整条分析链。",
-           ["行情软件的「所属行业」+「行业排名」",
-            "公司年报「行业竞争格局」章节",
-            "问财/同花顺 iFinD 等支持自然语言选股的工具"]),
-    "p8": ("客户与供应商集中度只在**年报附注**里披露，行情接口不提供，"
-           "本系统没有这个数据源。",
+    "p8": ("客户与供应商集中度只在**年报附注**里披露，本系统的数据源（东财 F10、"
+           "行情接口、数据中心）都不提供这个字段 —— 实测 F10 经营分析只返回"
+           "主营构成/经营范围/经营评述，没有客户供应商。这不是没去找，是取不到。",
            ["年报「前五名客户/供应商情况」附注（有具体占比）",
-            "巨潮资讯网 002241 年报全文搜索「前五名客户」"]),
-    "p9": ("大股东与高管增减持属于交易所公告数据，本系统不接公告源。",
-           ["巨潮资讯网「股东增减持」栏目",
-            "交易所官网「董监高持股变动」",
-            "行情软件的「股东研究 → 高管持股变动」"]),
+            "巨潮资讯网 002241 年报全文搜索「前五名客户」",
+            "注意：相当一部分公司只披露「前五名合计占比」，不给具体名称"]),
 }
 
 
@@ -899,54 +888,87 @@ def _ans_p4(ctx: dict) -> dict[str, Any]:
 
 
 def _ans_p5(ctx: dict) -> dict[str, Any]:
+    """PB / ROE 与同行对比。
+
+    数据来自东财 F10 行业分析的估值榜单与财务榜单，含行业平均/中值。
+    """
     sym = ctx["symbol"]
     q = ctx.get("quote") or {}
     latest = (ctx.get("fundamentals") or {}).get("latest") or {}
     pb, roe = _f(q.get("pb")), _f(latest.get("roe"))
+    pe = _f(q.get("pe_ttm"))
 
-    # 本系统能做的对比：与自身历史比 + 与全市场比
-    own = {"pb": pb, "roe": roe, "pe": _f(q.get("pe_ttm"))}
-    market_rank = None
-    try:
-        import sqlite3
-        from ..config import settings
-        con = sqlite3.connect(str(settings.db_path))
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            "SELECT pb FROM market_snapshot WHERE asset_type='stock' "
-            "AND pb IS NOT NULL AND pb > 0 AND pb < 60"
-        ).fetchall()
-        con.close()
-        if rows and pb:
-            vals = sorted(r["pb"] for r in rows)
-            below = sum(1 for v in vals if v <= pb)
-            market_rank = {
-                "total": len(vals),
-                "percentile": round(below / len(vals) * 100, 1),
-                "median": round(vals[len(vals) // 2], 2),
-            }
-    except Exception as exc:  # noqa: BLE001
-        log.debug("全市场 PB 分位计算失败: %s", exc)
+    ind = ctx.get("f10_industry")
+    if ind is None:
+        try:
+            ind = f10.industry(sym) if f10.available(sym) else {"ok": False}
+        except Exception as exc:  # noqa: BLE001
+            ind = {"ok": False, "reason": str(exc)}
+        ctx["f10_industry"] = ind
 
-    text = []
-    if pb is not None:
-        text.append(f"本股 PB {pb}")
-    if roe is not None:
-        text.append(f"ROE {roe}%")
-    if market_rank:
-        text.append(f"PB 在全市场 {market_rank['total']} 只股票中处于 "
-                    f"{market_rank['percentile']}% 分位（全市场中位 {market_rank['median']}）")
-    body = "，".join(text) + "。" if text else "缺少 PB / ROE 数据。"
-    body += ("**同行业另外两家龙头的对比本系统做不了** —— "
-             "我们没有行业分类和同业数据库，无法判断谁是龙头。"
-             "硬凑两个名字出来只会污染后面的分析。")
+    data = {"own": {"pb": pb, "roe": roe, "pe": pe}}
+    parts = []
+    if pb is not None and roe is not None:
+        parts.append(f"本股 PB {pb}、ROE {roe}%")
+    elif pb is not None:
+        parts.append(f"本股 PB {pb}")
+
+    verdict = None
+    if ind.get("ok"):
+        avg, med = ind.get("avg") or {}, ind.get("median") or {}
+        data["industry_avg"] = avg
+        data["industry_median"] = med
+        data["valuation_peers"] = ind.get("valuation", [])[:3]
+        data["finance_peers"] = ind.get("finance", [])[:3]
+
+        if avg:
+            parts.append(f"行业平均 PE {avg.get('pe_ttm') and round(avg['pe_ttm'], 1)}、"
+                         f"PB {avg.get('pb') and round(avg['pb'], 2)}")
+        if med:
+            parts.append(f"行业中值 ROE {med.get('roe_avg')}%、"
+                         f"净利率 {med.get('net_margin')}%")
+
+        # 用「中值」而不是「平均」下结论：平均会被亏损或超高估值公司带偏
+        # （实测该行业平均 PE 高达 91 倍，而估值榜单里的同行只有 15~52 倍）
+        if pb is not None and avg.get("pb"):
+            rel = ("低于" if pb < avg["pb"] else "高于")
+            verdict = f"本股 PB {pb} {rel}行业平均 {round(avg['pb'], 2)}"
+        if roe is not None and med.get("roe_avg") is not None:
+            rel = "低于" if roe < med["roe_avg"] else "高于"
+            verdict = (verdict + "，" if verdict else "") + \
+                      f"ROE {roe}% {rel}行业中值 {med['roe_avg']}%"
+
+        peers = ind.get("valuation", [])[:3]
+        if peers:
+            ps = "、".join(
+                f"{p['name']}（PE {round(p['pe_ttm'], 1) if p['pe_ttm'] else '—'}、"
+                f"PB {round(p['pb'], 2) if p['pb'] else '—'}）" for p in peers)
+            parts.append(f"估值榜单同行：{ps}")
+
+    text = "；".join(parts) + "。" if parts else "缺少 PB / ROE 数据。"
+    if verdict:
+        text += f"**{verdict}**。"
+        if pb is not None and roe is not None and ind.get("median", {}).get("roe_avg") is not None:
+            if pb < (ind.get("avg") or {}).get("pb", 1e9) and roe < ind["median"]["roe_avg"]:
+                text += ("注意这两条一起看：PB 更低但 ROE 也更低 —— "
+                         "「便宜」对应的正是「盈利能力弱于同业中位」，"
+                         "不是白捡的折价。")
+    if not ind.get("ok"):
+        text += ("行业对比取不到（本系统只覆盖 A股，且依赖东财 F10）。"
+                 if not f10.available(sym) else
+                 f"行业对比取不到：{ind.get('reason') or '数据源无响应'}。")
 
     return {
-        "status": "partial",
-        "data": {"own": own, "market_rank": market_rank},
-        "text": body,
-        "gap": _gap("p5", ["行情软件的「行业对比」功能可直接看到同业 PB/ROE 排序"]),
-        "source": f"{SRC_QUOTE} + 本地全市场快照",
+        "status": "grounded" if ind.get("ok") else "partial",
+        "data": data,
+        "text": text,
+        "gap": None if ind.get("ok") else
+               {"reason": "没有行业对比数据，无法给出同业结论。",
+                "where": ["行情软件的「行业对比」功能"]},
+        "source": f"{SRC_QUOTE} + 东财 F10 行业分析（估值榜单 / 财务榜单 / 行业平均与中值）",
+        "method_caveat": ("对比用的是**行业中值与平均**，而不是挑两家公司 —— "
+                          "东财的同行榜单每个维度各有一份、互相只有一两家重叠，"
+                          "硬点名「两家龙头」会变成选择性比较。"),
     }
 
 
@@ -1127,6 +1149,176 @@ def _ans_p7(ctx: dict) -> dict[str, Any]:
             "现金流量表「经营活动现金流净额」与净利润的比值（长期低于 1 要警惕）",
         ]),
         "source": SRC_FIN,
+    }
+
+
+def _ans_p1(ctx: dict) -> dict[str, Any]:
+    sym = ctx["symbol"]
+    if not f10.available(sym):
+        return {"status": "no_data", "data": None,
+                "text": None,
+                "gap": {"reason": f"{sym} 不是 A股，F10 主营构成只覆盖 A股。",
+                        "where": ["港股/ETF 请查基金或公司官网的披露文件"]}}
+    b = ctx.get("f10_business")
+    if b is None:
+        try:
+            b = f10.business(sym)
+        except Exception as exc:  # noqa: BLE001
+            b = {"ok": False, "reason": str(exc)}
+        ctx["f10_business"] = b
+    if not b.get("ok"):
+        return {"status": "partial", "data": None,
+                "text": f"主营构成取不到：{b.get('reason') or '无数据'}", "gap": None}
+
+    seg = b.get("segments") or {}
+    review = (b.get("review") or "").strip()
+
+    def line(kind: str) -> str:
+        items = seg.get(kind) or []
+        if not items:
+            return ""
+        parts = []
+        for it in items[:4]:
+            r = it.get("ratio")
+            parts.append(f"{it['name']} {r * 100:.1f}%" if r is not None else str(it["name"]))
+        return f"按{kind[1:]}：" + "、".join(parts)
+
+    detail = "；".join(x for x in (line("按产品"), line("按行业"), line("按地区")) if x)
+
+    # 公司自己的业务定位：取经营评述首句，不自己编
+    head = review.split("。")[0] + "。" if review else ""
+    # 原始披露里混用半角逗号/分号，读起来突兀，统一成全角
+    head = head.replace(",", "，").replace(";", "；").replace(":", "：")
+    text = ""
+    if head:
+        text += f"公司自述（{b.get('report_name') or ''} 定期报告）：{head}"
+    if detail:
+        text += f"收入来源（{b.get('report_name') or ''}）：{detail}。"
+    if seg.get("按产品"):
+        top = seg["按产品"][0]
+        text += (f"最大的一块是 **{top['name']}**，占营收 "
+                 f"{(top.get('ratio') or 0) * 100:.1f}%。")
+
+    return {
+        "status": "grounded",
+        "data": {"segments": seg, "report_name": b.get("report_name"),
+                 "scope": b.get("scope"), "review_head": head},
+        "text": text,
+        "gap": None,
+        "source": "东财 F10 经营分析（主营构成 / 经营范围 / 经营评述）",
+        "method_caveat": ("「一句话概括商业模式」用的是**公司自己在定期报告里的表述**，"
+                          "不是本系统的判断。收入拆分口径（按产品/按行业/按地区）"
+                          "由公司自己选择，不同公司之间不可直接比较。"),
+    }
+
+
+def _ans_p2(ctx: dict) -> dict[str, Any]:
+    sym = ctx["symbol"]
+    if not f10.available(sym):
+        return {"status": "no_data", "data": None, "text": None,
+                "gap": {"reason": f"{sym} 不是 A股，F10 行业数据只覆盖 A股。",
+                        "where": ["港股请查港交所披露易或券商研报"]}}
+    ind = ctx.get("f10_industry")
+    if ind is None:
+        try:
+            ind = f10.industry(sym)
+        except Exception as exc:  # noqa: BLE001
+            ind = {"ok": False, "reason": str(exc)}
+        ctx["f10_industry"] = ind
+    if not ind.get("ok"):
+        return {"status": "partial", "data": None,
+                "text": f"行业对比取不到：{ind.get('reason') or '无数据'}", "gap": None}
+
+    def names(key: str, field: str, unit: str = "%") -> str:
+        rows = ind.get(key) or []
+        out = []
+        for r in rows[:3]:
+            v = r.get(field)
+            out.append(f"{r['name']}（{v:.1f}{unit}）" if v is not None else r["name"])
+        return "、".join(out)
+
+    scale = ind.get("scale") or {}
+    text = ("东财按行业给出的是**三份不同的榜单**，各自包含不同的公司，"
+            "所以不存在一份统一的「前三大竞争对手」：")
+    if ind.get("growth"):
+        text += f"成长性榜单：{names('growth', 'revenue_yoy')}。"
+    if ind.get("valuation"):
+        text += f"估值榜单：{names('valuation', 'pe_ttm', ' 倍')}。"
+    if ind.get("finance"):
+        text += f"财务榜单：{names('finance', 'roe_avg')}。"
+    if scale.get("market_cap_rank"):
+        rk = lambda v: f"第 {v:.0f}" if isinstance(v, (int, float)) else "—"
+        text += (f"本股在行业内市值{rk(scale.get('market_cap_rank'))}、"
+                 f"营收{rk(scale.get('revenue_rank'))}、"
+                 f"净利润{rk(scale.get('net_profit_rank'))}。")
+    text += ("**但「每家的核心优势是什么」本系统给不出** —— "
+             "那要读各家的年报和业务描述再做定性判断，"
+             "不是从财务指标能推出来的。上面的名单和指标是真实数据，"
+             "可以作为你自己判断的素材，但我们不会替你写一句「某家优势是技术领先」。")
+
+    return {
+        "status": "partial",
+        "data": ind,
+        "text": text,
+        "gap": {"reason": "「各家的核心优势」属于定性判断，需要阅读各家公司年报的业务描述，"
+                          "本系统没有这类文本源，也不做没有依据的评判。",
+                "where": ["各公司年报「业务概要」「核心竞争力」章节",
+                          "券商行业深度报告",
+                          "把上面这份同行名单拿去问 AI，让它逐家总结（这类通用信息 AI 可靠）"]},
+        "source": "东财 F10 行业分析（成长性/估值/财务三份榜单 + 行业排名）",
+    }
+
+
+def _ans_p9(ctx: dict) -> dict[str, Any]:
+    sym = ctx["symbol"]
+    if not f10.available(sym):
+        return {"status": "no_data", "data": None, "text": None,
+                "gap": {"reason": f"{sym} 不是 A股，本系统没有港股/ETF 的增减持数据源。",
+                        "where": ["港交所披露易（hkexnews.hk）"]}}
+    h = ctx.get("holders")
+    if h is None:
+        try:
+            h = f10.holder_changes(sym, days=365)
+        except Exception as exc:  # noqa: BLE001
+            h = {"ok": False, "reason": str(exc)}
+        ctx["holders"] = h
+    if not h.get("ok"):
+        return {"status": "partial", "data": None,
+                "text": f"增减持数据取不到：{h.get('reason') or '无数据'}", "gap": None}
+
+    if h.get("direction") == "无记录":
+        text = ("近一年内**没有**高管或股东的增减持公告 —— "
+                "整体既不净买入也不净卖出，是没有动作。")
+        if h.get("holders"):
+            x = h["holders"][0]
+            text += (f"作为参照，最近一次变动是 {x['date']} "
+                     f"{x['holder']} {x['direction']} "
+                     f"{abs(x['shares']) / 1e4:.2f} 万股 —— "
+                     f"距今已超过一年，不能当作当下的信号。")
+        elif h.get("executives"):
+            x = h["executives"][0]
+            text += (f"最近一次变动是 {x['date']} {x['person']} "
+                     f"{'增持' if x['shares'] > 0 else '减持'} "
+                     f"{abs(x['shares']):,.0f} 股。")
+    else:
+        total = h["exec_net_shares"] + h["holder_net_shares"]
+        text = (f"近一年整体为 **{h['direction']}**：高管 {h['window_exec_count']} 笔、"
+                f"股东 {h['window_holder_count']} 笔，合计 "
+                f"{total / 1e4:+,.2f} 万股。")
+        for x in h["holders"][:3]:
+            if x.get("in_window"):
+                text += (f"{x['date']} {x['holder']} {x['direction']} "
+                         f"{abs(x['shares']) / 1e4:.2f} 万股；")
+    text += "（注意：增持/减持是**信号**不是**结论** —— 高管增持可能是看好，也可能只是股权激励行权。）"
+
+    return {
+        "status": "grounded",
+        "data": h,
+        "text": text,
+        "gap": None,
+        "source": "东财数据中心（高管持股变动 + 股东增减持明细，逐笔公告）",
+        "method_caveat": ("股东表里的数量单位是**万股**，已换算成股；"
+                          "增持/减持方向取表格自带的 DIRECTION 字段，不用比例正负去猜。"),
     }
 
 
@@ -1335,8 +1527,9 @@ def _ans_p13(ctx: dict) -> dict[str, Any]:
 
 
 HANDLERS = {
+    "p1": _ans_p1, "p2": _ans_p2,
     "p3": _ans_p3, "p4": _ans_p4, "p5": _ans_p5, "p6": _ans_p6,
-    "p7": _ans_p7, "p10": _ans_p10, "p11": _ans_p11,
+    "p7": _ans_p7, "p9": _ans_p9, "p10": _ans_p10, "p11": _ans_p11,
     "p12": _ans_p12, "p13": _ans_p13,
 }
 

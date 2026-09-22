@@ -176,6 +176,11 @@ check "港股无财报不崩"      200 "$BASE/api/flow/00700.HK"
 check_has "返回六步结构"    '"steps"' "$BASE/api/flow/002241.SZ"
 check_has "标注无数据项"    '"no_data"' "$BASE/api/flow/002241.SZ"
 check_has "带免责声明"      '不构成投资建议' "$BASE/api/flow/002241.SZ"
+# 补上 F10 数据源后，A股的「无数据」项应当只剩 1 项（客户供应商，确实取不到）
+check_has "A股已接入主营构成"   '东财 F10 经营分析' "$BASE/api/flow/002241.SZ"
+check_has "A股已接入行业对比"   'F10 行业分析' "$BASE/api/flow/002241.SZ"
+check_has "A股已接入增减持"     '高管持股变动' "$BASE/api/flow/002241.SZ"
+check "ETF 全流程不崩"          200 "$BASE/api/flow/510300.SH"
 check_has "数据包含提示词原文" \
   '请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。' \
   "$BASE/api/flow/002241.SZ/pack"

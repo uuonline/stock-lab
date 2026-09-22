@@ -1711,6 +1711,57 @@ function renderFlowData(id, d) {
       <thead><tr><th>侧面检查</th><th>数据</th><th>判定</th><th>说明</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
   }
+  if (id === 'p1' && d.segments) {
+    let html = '';
+    for (const [kind, items] of Object.entries(d.segments)) {
+      if (!items || !items.length) continue;
+      const rows = items.map(it => `<tr>
+        <td>${esc(it.name)}</td>
+        <td class="num">${it.income === null ? '—' : (it.income / 1e8).toFixed(2) + ' 亿'}</td>
+        <td class="num">${it.ratio === null ? '—' : (it.ratio * 100).toFixed(1) + '%'}</td>
+        <td class="num">${it.gross_margin === null ? '—' : (it.gross_margin * 100).toFixed(1) + '%'}</td>
+      </tr>`).join('');
+      html += `<h3 class="mt" style="font-size:12px">${esc(kind)}</h3>
+        <div class="table-wrap"><table>
+        <thead><tr><th>项目</th><th>收入</th><th>占比</th><th>毛利率</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+    }
+    return html || '';
+  }
+  if (id === 'p2') {
+    const tbl = (rows, cols) => rows && rows.length ? `<div class="table-wrap"><table>
+      <thead><tr>${cols.map(c => `<th>${esc(c[0])}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map(r => `<tr>${cols.map(c => {
+        const v = r[c[1]];
+        return `<td${c[2] ? ' class="num"' : ''}>${v === null || v === undefined ? '—'
+          : (c[2] ? Number(v).toFixed(c[3] === undefined ? 1 : c[3]) : esc(v))}</td>`;
+      }).join('')}</tr>`).join('')}</tbody></table></div>` : '';
+    let html = '';
+    if (d.growth && d.growth.length) {
+      html += '<h3 class="mt" style="font-size:12px">成长性榜单（营收同比）</h3>'
+        + tbl(d.growth.slice(0, 5), [['公司', 'name'], ['营收同比%', 'revenue_yoy', 1], ['净利同比%', 'profit_yoy', 1], ['行业排名', 'rank', 1, 0]]);
+    }
+    if (d.valuation && d.valuation.length) {
+      html += '<h3 class="mt" style="font-size:12px">估值榜单</h3>'
+        + tbl(d.valuation.slice(0, 5), [['公司', 'name'], ['PE(TTM)', 'pe_ttm', 1], ['PB', 'pb', 1, 2]]);
+    }
+    if (d.finance && d.finance.length) {
+      html += '<h3 class="mt" style="font-size:12px">财务榜单（ROE）</h3>'
+        + tbl(d.finance.slice(0, 5), [['公司', 'name'], ['ROE%', 'roe_avg', 1], ['净利率%', 'net_margin', 1]]);
+    }
+    return html;
+  }
+  if (id === 'p9') {
+    const list = (arr, nameKey, kind) => (arr || []).slice(0, 5).map(x => `<tr>
+      <td>${esc(x.date)}</td><td>${esc(x[nameKey])}</td>
+      <td>${esc(x.direction || (x.shares > 0 ? '增持' : '减持'))}</td>
+      <td class="num">${Math.abs(x.shares).toLocaleString()} 股</td></tr>`).join('');
+    const rows = list(d.executives, 'person') + list(d.holders, 'holder');
+    if (!rows) return '<div class="muted">近一年无增减持记录</div>';
+    return `<div class="table-wrap"><table>
+      <thead><tr><th>日期</th><th>姓名/股东</th><th>方向</th><th>数量</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
   if (id === 'p10') {
     return `<div class="kv-list">
       <div class="kv"><span class="k">现价</span><span class="v">${fmtNum(d.price)}</span></div>
