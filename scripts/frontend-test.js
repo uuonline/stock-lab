@@ -512,6 +512,43 @@ function bad(name, detail) {
       // 免责声明必须出现在栏目里
       ft.includes('不构成投资建议') ? ok('全流程栏目带免责声明') : bad('缺少免责声明');
 
+      // 免责声明里的「无数据 N 项」必须和实际数量一致。
+      // 曾经写死成 5，而实际是 4 —— 免责声明本身在说假话。
+      {
+        const m = ft.match(/标记为「无数据」的\s*(\d+)\s*项/);
+        const declared = m ? Number(m[1]) : -1;
+        const actual = (ft.match(/本系统无此数据/g) || []).length;
+        declared === actual
+          ? ok('免责声明的项数与实际一致', declared + ' 项')
+          : bad('免责声明项数不符', `声明 ${declared} / 实际 ${actual}`);
+      }
+
+      // 三种情景的概率必须构成划分（相加 100%）。
+      // 曾经三者相加只有 80%：区间互相重叠，数字自相矛盾。
+      // 用 DOM 读表格的「概率」列 —— 不用正则扫文本，文本里还有
+      // 「涨跌」列也是百分数，正则会抓错列（第一版就抓错了）。
+      {
+        let probs = null;
+        for (const tb of $('#flowSteps').querySelectorAll('table')) {
+          const head = tb.querySelector('thead') ? tb.querySelector('thead').textContent : '';
+          if (head.includes('情景') && head.includes('概率')) {
+            probs = [...tb.querySelectorAll('tbody tr')].map(tr => {
+              const tds = tr.querySelectorAll('td');
+              return Number((tds[3] ? tds[3].textContent : '').replace(/[^\d.]/g, ''));
+            });
+            break;
+          }
+        }
+        if (probs && probs.length === 3 && probs.every(n => Number.isFinite(n))) {
+          const sum = probs.reduce((a, b) => a + b, 0);
+          Math.abs(sum - 100) <= 1.5
+            ? ok('三种情景概率构成划分', probs.join('+') + '=' + sum.toFixed(1) + '%')
+            : bad('情景概率相加不为 100%', probs.join('+') + '=' + sum.toFixed(1) + '%');
+        } else {
+          bad('未能读到三种情景概率', JSON.stringify(probs));
+        }
+      }
+
       // 提示词原文必须一字不改
       ft.includes('请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。')
         ? ok('提示词原文完整保留') : bad('提示词原文被改动');

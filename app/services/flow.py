@@ -540,6 +540,17 @@ def scenarios(bars: list[dict], price: float | None = None,
     dn_1 = cur * math.exp(drift - sig)
     dn_2 = cur * math.exp(drift - 2 * sig)
 
+    # 概率用**零漂移**的波动率模型。
+    # 拿最近 60 日的平均收益当未来 63 天的漂移是典型错误：那等于把一波
+    # 上涨外推三个月，会算出"乐观情景概率 47.9%"这种明显偏乐观的数字
+    # （实测歌尔股份就出现过）。零漂移不假设方向，只问"这个距离在波动率
+    # 尺度上有多远"，才是情景概率该有的含义。
+    def prob_above0(x: float) -> float:
+        if sig <= 0:
+            return 0.0
+        z = math.log(x / cur) / sig
+        return 0.5 * (1 - math.erf(z / math.sqrt(2)))
+
     # 关键价位：优先用真实结构，没有就用统计值
     snap = ta.latest_snapshot(bars) or {}
     v = snap.get("values") or {}
@@ -551,10 +562,14 @@ def scenarios(bars: list[dict], price: float | None = None,
     box_bottom = _f((box or {}).get("bottom"))
 
     opt_target = res[0]["price"] if res else round(up_1, 2)
-    mid_low = sup[0]["price"] if sup else round(dn_1, 2)
-    mid_high = res[0]["price"] if res else round(up_1, 2)
     pess_target = (box_bottom if box_bottom and box_bottom < (sup[0]["price"] if sup else 1e18)
                    else (sup[0]["price"] if sup else round(dn_2, 2)))
+    # 三个区间必须是**互不重叠、合起来是全部**的划分，否则概率没有意义。
+    # 之前的写法里"震荡"用的是 [支撑, 压力]，"悲观"却用箱底 —— 两者重叠，
+    # 三者相加只有 80%，用户看到的是一组自相矛盾的数字。
+    low_b, high_b = sorted([pess_target, opt_target])
+    if high_b - low_b < cur * 0.01:          # 区间太窄就按统计值撑开
+        low_b, high_b = sorted([round(dn_1, 2), round(up_1, 2)])
 
     def pct_of(target: float) -> str:
         return f"{(target / cur - 1) * 100:+.1f}%"
@@ -574,12 +589,14 @@ def scenarios(bars: list[dict], price: float | None = None,
         "cases": [
             {
                 "name": "乐观",
-                "prob": round(prob_above(opt_target) * 100, 1),
+                "prob": round(prob_above0(high_b) * 100, 1),
                 "target": opt_target,
                 "change": pct_of(opt_target),
                 "desc": (f"站上 {opt_target}（{pct_of(opt_target)}）。"
                          f"{'这是最近的一个真实压力位，' if res else ''}"
-                         f"若能放量站稳，上看 {round(up_2, 2)} 附近。"),
+                         f"若能放量站稳，波动率模型给出的 2 倍标准差上界是 "
+                         f"{round(up_2, 2)}（{pct_of(up_2)}）—— "
+                         f"那是统计上界，不是目标价，不要当成预期涨幅。"),
                 "plan": (f"突破 {opt_target} 且成交量不低于近 5 日均量的 1.2 倍，"
                          f"可考虑持有；若冲高后回落跌回该价位下方，"
                          f"视为假突破，减回原仓位。"),
@@ -587,20 +604,20 @@ def scenarios(bars: list[dict], price: float | None = None,
             },
             {
                 "name": "震荡",
-                "prob": round((prob_above(mid_low) - prob_above(mid_high)) * 100, 1),
-                "target": f"{mid_low} ~ {mid_high}",
-                "change": f"{pct_of(mid_low)} ~ {pct_of(mid_high)}",
-                "desc": (f"在 {mid_low} ~ {mid_high} 之间反复。"
+                "prob": round((prob_above0(low_b) - prob_above0(high_b)) * 100, 1),
+                "target": f"{low_b} ~ {high_b}",
+                "change": f"{pct_of(low_b)} ~ {pct_of(high_b)}",
+                "desc": (f"在 {low_b} ~ {high_b} 之间反复。"
                          f"这是波动率中性假设下最可能的情形："
                          f"近 60 日日均波动 {sd * 100:.2f}%，三个月累计一个标准差是 "
                          f"{sig * 100:.1f}%。"),
                 "plan": ("区间内不追涨杀跌；接近上沿减一部分、接近下沿再考虑补回。"
                          "没有明确方向的震荡里，频繁交易的手续费和滑点往往吃掉全部收益。"),
-                "trigger": f"始终未能有效突破 {mid_high}",
+                "trigger": f"始终未能有效突破 {high_b}",
             },
             {
                 "name": "悲观",
-                "prob": round((1 - prob_above(pess_target)) * 100, 1),
+                "prob": round((1 - prob_above0(low_b)) * 100, 1),
                 "target": pess_target,
                 "change": pct_of(pess_target),
                 "desc": (f"回落到 {pess_target}（{pct_of(pess_target)}）。"
@@ -612,8 +629,10 @@ def scenarios(bars: list[dict], price: float | None = None,
                 "trigger": f"放量跌破 {pess_target}",
             },
         ],
-        "caveat": ("三种情况的概率来自正态分布假设，真实市场存在厚尾，"
-                   "极端行情比正态预测的更频繁 —— 概率只用于比较量级，不要当精确值。"),
+        "caveat": ("三个情景互不重叠、概率相加为 100%，按**零漂移**的波动率模型计算"
+                   "（不假设方向，只衡量距离在波动率尺度上有多远）。"
+                   "真实市场是厚尾的，极端行情比正态预测的更频繁 —— "
+                   "概率只用于比较量级，不要当精确值。"),
     }
 
 
@@ -871,7 +890,7 @@ def _ans_p4(ctx: dict) -> dict[str, Any]:
         "gap": None,
         "source": (f"{SRC_FIN} + {SRC_KLINE}。"
                    f"算法：逐日 PE = 当日收盘价 / 当日可见的 TTM EPS，"
-                   f"用法定披露滞后 {REPORT_LAG_DAYS} 避免前视偏差；"
+                   f"用法定披露滞后（季报 30~62 天、年报 120 天）避免前视偏差；"
                    f"剔除 PE > {PE_OUTLIER:.0f} 的失真值 {h['outliers']} 天"
                    f"（盈利接近零时 PE 会失真，不是真的贵）。"),
         "method_caveat": (None if h["days"] >= 1000 else
@@ -1047,7 +1066,10 @@ def _ans_p7(ctx: dict) -> dict[str, Any]:
             "value": f"{nms[0][0]} 年 {nms[0][1]:.2f}% → {nms[-1][0]} 年 {nms[-1][1]:.2f}%",
             "flag": abs(delta) > 5,
             "read": ("净利率变动超过 5 个百分点，需要拆开看是成本、"
-                     "费用还是非经常损益" if abs(delta) > 5 else "净利率相对稳定"),
+                     "费用还是非经常损益" if abs(delta) > 5
+                     else (f"净利率{'下滑' if delta < 0 else '上升'} "
+                           f"{abs(delta):.2f} 个百分点，未触发阈值"
+                           if abs(delta) > 1 else "净利率相对稳定")),
         })
     # 3) 资产负债率（负债与表外风险的信号）
     drs = [(y["year"], _f(y.get("debt_ratio"))) for y in years]
@@ -1071,7 +1093,10 @@ def _ans_p7(ctx: dict) -> dict[str, Any]:
             "value": f"{gms[0][0]} 年 {gms[0][1]:.2f}% → {gms[-1][0]} 年 {gms[-1][1]:.2f}%",
             "flag": delta < -5,
             "read": ("毛利率下滑超过 5 个百分点，可能是价格战、"
-                     "成本上升或产品结构变化" if delta < -5 else "毛利率未明显恶化"),
+                     "成本上升或产品结构变化" if delta < -5
+                     else (f"毛利率下滑 {abs(delta):.2f} 个百分点，"
+                           f"幅度未触发阈值，但方向是向下的"
+                           if delta < -1.5 else "毛利率基本平稳")),
         })
 
     flagged = [c for c in checks if c["flag"]]
@@ -1249,26 +1274,33 @@ def _ans_p13(ctx: dict) -> dict[str, Any]:
     price = _f(q.get("price"))
     ma20 = _f(tech.get("ma20"))
 
-    # 仓位规则：由评分机械映射，不含主观判断
+    # 仓位规则：由评分机械映射，不含主观判断。
+    # 阈值必须和 panel.VERDICT_BANDS 是同一套 —— 之前这里另写了一套
+    # (5.5/4.5)，结果同一个 5.36 分在界面上同时显示「谨慎看多」和
+    # 「中性」，两个标签互相打架。
+    from .panel import verdict_of
+    band = verdict_of(score) if score is not None else None
+    POS_BY_BAND = {
+        "看多": "不超过 30%",
+        "谨慎看多": "不超过 20%",
+        "中性": "不超过 10%",
+        "谨慎看空": "暂不参与 / 0%",
+        "看空": "暂不参与 / 0%",
+    }
+    ACTION_BY_BAND = {
+        "看多": "持有",
+        "谨慎看多": "持有或小仓位试探",
+        "中性": "持有或观望",
+        "谨慎看空": "减持 / 观望",
+        "看空": "减持 / 观望",
+    }
     if score is None:
         pos, pos_reason = "无法给出", "综合评分缺失"
-    elif score >= 6.5:
-        pos, pos_reason = "不超过 30%", f"综合评分 {score}（偏高）"
-    elif score >= 5.5:
-        pos, pos_reason = "不超过 20%", f"综合评分 {score}（中性偏多）"
-    elif score >= 4.5:
-        pos, pos_reason = "不超过 10%", f"综合评分 {score}（中性）"
+        action = "观察"
     else:
-        pos, pos_reason = "暂不参与 / 0%", f"综合评分 {score}（偏弱）"
-
-    action = "观察"
-    if score is not None:
-        if score >= 5.5:
-            action = "持有"
-        elif score >= 4.5:
-            action = "持有或小仓位试探"
-        else:
-            action = "减持 / 观望"
+        pos = POS_BY_BAND.get(band, "不超过 10%")
+        action = ACTION_BY_BAND.get(band, "观察")
+        pos_reason = f"综合评分 {score}（{band}）"
 
     bits = []
     if price:
@@ -1419,9 +1451,11 @@ def build(symbol: str) -> dict[str, Any]:
         "disclaimer": (
             "本栏目只做两件事：把系统里**真实存在的数据**取出来算好，"
             "以及明确指出**哪些信息本系统没有**。"
-            "标记为「无数据」的 5 项不会生成任何结论 —— "
-            "AI 在没有数据时会编出一个像模像样的答案，那比空白更危险。"
-            "所有内容不构成投资建议。"
+            # 这里的数字必须跟着实际结果走 —— 写死过一次，界面上显示
+            # "5 项"而实际是 4 项，等于免责声明本身在说假话。
+            f"标记为「无数据」的 {sum(1 for a in answers if a['status'] == 'no_data')} 项"
+            "不会生成任何结论 —— AI 在没有数据时会编出一个像模像样的答案，"
+            "那比空白更危险。所有内容不构成投资建议。"
         ),
     }
 
