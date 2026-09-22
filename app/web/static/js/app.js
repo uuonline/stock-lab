@@ -1640,6 +1640,30 @@ function mdInline(t) {
   return esc(t || '').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 }
 
+/* 数据截止日期的展示。
+   把日期原样显示是不够的 —— 用户需要知道「这条数据有多新」。
+   实测行业对比那三张榜单的报告期是 2025-12-31（东财按年报口径发布），
+   比当前时间滞后 9 个月；财报最新一期是 2026 中报。
+   不说明的话，用户会以为看到的同业数据是最新的。 */
+function fmtAsOf(v) {
+  const t = String(v || '');
+  if (!t) return '—';
+  if (/^\d{8}$/.test(t)) {
+    return `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}（行情实时）`;
+  }
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return t;
+  const today = new Date();
+  const d = new Date(`${t}T00:00:00`);
+  const days = Math.floor((today - d) / 86400000);
+  if (days <= 0) return `${t}（今天）`;
+  if (days === 1) return `${t}（昨天）`;
+  if (days < 45) return `${t}（${days} 天前）`;
+  const months = Math.round(days / 30);
+  const stale = days > 120;
+  return `${t}（约 ${months} 个月前${stale ? '，注意数据较旧' : ''}）`;
+}
+
 function fmtNum(v, digits) {
   if (v === null || v === undefined || v === '') return '—';
   const n = Number(v);
@@ -1872,6 +1896,8 @@ function renderFlow(d) {
               </div>` : ''}
             ${a.source ? `<div class="muted mt-sm" style="font-size:11px">
               数据来源：${esc(a.source)}</div>` : ''}
+            ${a.as_of ? `<div class="mt-sm" style="font-size:11px">
+              <span class="muted">数据截止：</span>${esc(fmtAsOf(a.as_of))}</div>` : ''}
             ${a.method_caveat ? `<div class="muted" style="font-size:11px">
               口径：${esc(a.method_caveat)}</div>` : ''}
           </div>

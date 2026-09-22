@@ -140,6 +140,7 @@ def business(symbol: str) -> dict[str, Any]:
         "scope": scope,
         "review": review,
         "report_name": latest[:10] if latest else None,
+        "as_of": latest[:10] if latest else None,
     })
     return out
 
@@ -222,6 +223,13 @@ def industry(symbol: str) -> dict[str, Any]:
             "net_profit": _num(g.get("NETPROFIT")),
             "net_profit_rank": _num(g.get("NETPROFIT_RANK")),
         }
+    # 三张榜单共用同一个报告期，取出来告诉用户数据有多新 ——
+    # 实测这个日期是**年报口径**（2025-12-31），比当前时间滞后大半年，
+    # 不标出来用户会以为看到的是最新同业数据。
+    dates = sorted({str(r.get("REPORT_DATE") or "")[:10]
+                    for k in ("czxbj", "gzbj", "dbfxbj")
+                    for r in (d.get(k) or []) if r.get("REPORT_DATE")})
+    out["as_of"] = dates[-1] if dates else None
     out["ok"] = bool(out["growth"] or out["valuation"] or out["finance"])
     return out
 
@@ -299,6 +307,8 @@ def holder_changes(symbol: str, days: int = 365) -> dict[str, Any]:
     out["holder_net_shares"] = net_holder
     out["window_exec_count"] = len(window_exec)
     out["window_holder_count"] = len(window_holder)
+    all_dates = [x["date"] for x in out["executives"] + out["holders"] if x.get("date")]
+    out["as_of"] = max(all_dates) if all_dates else None
     out["errors"] = errs
 
     # 取数成功但窗口内没记录，是**有效结论**（近一年确实没公布增减持），

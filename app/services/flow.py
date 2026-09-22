@@ -839,6 +839,9 @@ def _ans_p3(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "grounded",
+        # 年报口径：rows 是自己拼的年度字典，没有 report_date 字段，
+        # 所以用最后一个年度的 12-31 表示"数据截至该年度"
+        "as_of": f"{last.get('year')}-12-31" if last.get("year") else None,
         "data": {"years": rows, "rev_cagr": round(rev_cagr, 2) if rev_cagr is not None else None,
                  "np_cagr": round(np_cagr, 2) if np_cagr is not None else None,
                  "rev_trend": trend, "np_trend": np_trend,
@@ -874,6 +877,7 @@ def _ans_p4(ctx: dict) -> dict[str, Any]:
         text += r["cross_note"]
     return {
         "status": "grounded",
+        "as_of": h["end_date"],
         "data": r,
         "text": text,
         "gap": None,
@@ -960,6 +964,7 @@ def _ans_p5(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "grounded" if ind.get("ok") else "partial",
+        "as_of": ind.get("as_of"),
         "data": data,
         "text": text,
         "gap": None if ind.get("ok") else
@@ -1042,6 +1047,7 @@ def _ans_p6(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "grounded",
+        "as_of": f"{last.get('year')}-12-31" if last.get("year") else None,
         "data": {"pe": pe, "profit_cagr": round(growth, 2) if growth else None,
                  "rev_cagr": round(rev_growth, 2) if rev_growth else None,
                  "peg": round(peg, 2) if peg else None,
@@ -1138,6 +1144,7 @@ def _ans_p7(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "partial",
+        "as_of": str(latest.get("report_date") or "")[:10],
         "data": {"checks": checks, "flagged": len(flagged),
                  "latest": {"report_name": latest.get("report_name"),
                             "gross_margin": _f(latest.get("gross_margin")),
@@ -1201,6 +1208,7 @@ def _ans_p1(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "grounded",
+        "as_of": b.get("as_of"),
         "data": {"segments": seg, "report_name": b.get("report_name"),
                  "scope": b.get("scope"), "review_head": head},
         "text": text,
@@ -1258,6 +1266,7 @@ def _ans_p2(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "partial",
+        "as_of": ind.get("as_of"),
         "data": ind,
         "text": text,
         "gap": {"reason": "「各家的核心优势」属于定性判断，需要阅读各家公司年报的业务描述，"
@@ -1313,6 +1322,7 @@ def _ans_p9(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "grounded",
+        "as_of": h.get("as_of"),
         "data": h,
         "text": text,
         "gap": None,
@@ -1374,6 +1384,7 @@ def _ans_p10(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "grounded",
+        "as_of": (bars[-1].get("date") if bars else None),
         "data": {"price": price, "ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60,
                  "channel": channel, "slope_note": slope_note,
                  "rel": {"ma5": rel(ma5), "ma20": rel(ma20), "ma60": rel(ma60)}},
@@ -1416,6 +1427,7 @@ def _ans_p11(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "grounded",
+        "as_of": (bars[-1].get("date") if bars else None),
         "data": sr,
         "text": text,
         "gap": None,
@@ -1442,6 +1454,7 @@ def _ans_p12(ctx: dict) -> dict[str, Any]:
             f"（均线、箱体上下沿、支撑压力位），不是纯统计数字。")
     return {
         "status": "grounded",
+        "as_of": (bars[-1].get("date") if bars else None),
         "data": r,
         "text": text,
         "gap": None,
@@ -1514,6 +1527,8 @@ def _ans_p13(ctx: dict) -> dict[str, Any]:
 
     return {
         "status": "grounded",
+        "as_of": (ctx.get("quote") or {}).get("update_time") and
+                 str(ctx["quote"]["update_time"])[:8],
         "data": {"score": score, "verdict": verdict, "action": action,
                  "position": pos, "position_reason": pos_reason,
                  "plan": plan, "chars": len(text)},
@@ -1599,7 +1614,8 @@ def build(symbol: str) -> dict[str, Any]:
     for p in PROMPTS:
         pid = p["id"]
         base = {"id": pid, "step": p["step"], "seq": PROMPTS.index(p) + 1,
-                "title": p["title"], "prompt": p["prompt"], "status": p["status"]}
+                "title": p["title"], "prompt": p["prompt"], "status": p["status"],
+                "as_of": None}
         fn = HANDLERS.get(pid)
         if fn is None:
             base.update({"data": None, "text": None, "gap": _gap(pid),
@@ -1685,6 +1701,8 @@ def data_pack(symbol: str) -> str:
                 data = a.get("data")
                 if data:
                     lines.append(f"结构化数据：{_json_brief(data)}")
+                if a.get("as_of"):
+                    lines.append(f"数据截止：{_asof_text(a['as_of'])}")
                 if a.get("source"):
                     lines.append(f"数据来源：{a['source']}")
                 if a.get("method_caveat"):
@@ -1694,6 +1712,18 @@ def data_pack(symbol: str) -> str:
     lines.append("把上面每个提示词连同它的数据一起发给 AI。")
     lines.append("标注【本系统无此数据】的部分，AI 若给出具体数字即为编造。")
     return "\n".join(lines)
+
+
+def _asof_text(v: Any) -> str:
+    """把截止日期说成人话 —— 光给个日期，用户不知道它意味着什么。"""
+    t = str(v or "")
+    if not t:
+        return "—"
+    if len(t) == 8 and t.isdigit():          # 行情时间戳 20260922161406
+        return f"{t[:4]}-{t[4:6]}-{t[6:8]}（行情实时）"
+    if t == dt.date.today().isoformat():
+        return f"{t}（今天）"
+    return t
 
 
 def _json_brief(obj: Any, limit: int = 1200) -> str:
