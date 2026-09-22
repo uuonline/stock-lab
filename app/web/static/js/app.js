@@ -2214,22 +2214,53 @@ function renderCalc(r) {
   if (!r || !r.ok) { el.innerHTML = `<div class="warn-box">${esc((r && r.reason) || '计算失败')}</div>`; return; }
   el.innerHTML = `
     <div class="kv-list">
-      <div class="kv"><span class="k">建议股数</span><span class="v"><b>${r.shares}</b> 股（${r.lots} 手）</span></div>
+      <div class="kv"><span class="k">可下单股数</span><span class="v">
+        <b style="font-size:15px">${r.final_shares !== undefined ? r.final_shares : r.shares}</b> 股
+        （${r.lots} 手）${r.binding && r.binding !== '风险预算'
+          ? ` <span class="muted">— 受「${r.binding}」限制</span>` : ''}</span></div>
+      <div class="kv"><span class="k">其中按风险预算</span><span class="v">${r.shares} 股
+        ${r.final_shares !== undefined && r.final_shares < r.shares
+          ? '<span class="muted">（放不下，已按资金缩减）</span>' : ''}</span></div>
       <div class="kv"><span class="k">占用资金</span><span class="v">${r.cost} 元（占总资金 ${r.position_pct}%）</span></div>
       <div class="kv"><span class="k">单笔最大亏损</span><span class="v down">${r.max_loss} 元
-        （风险预算 ${r.risk_amount} 元）</span></div>
+        ${r.actual_risk_pct !== undefined && r.actual_risk_pct !== null
+          ? `（实际占总资金 ${r.actual_risk_pct}%，预算 ${r.risk_pct}%）` : ''}</span></div>
       <div class="kv"><span class="k">止损距离</span><span class="v">${r.stop_distance_pct}%</span></div>
       ${r.affordable_shares === null || r.affordable_shares === undefined ? '' :
         `<div class="kv"><span class="k">账户可买</span><span class="v">
-          ${r.affordable_shares} 股（按 ${r.entry} 算，与 App 的「可买」同口径）
-          ${r.shares <= r.affordable_shares ? '<span class="up">✓ 够</span>'
-            : '<span class="down">✗ 不够</span>'}</span></div>`}
+          按委托价 ${r.entry} → <b>${r.affordable_shares}</b> 股
+          ${r.affordable_at_current !== null && r.affordable_at_current !== undefined
+            ? `　按现价 ${r.current_price} → <b>${r.affordable_at_current}</b> 股` : ''}
+          <span class="muted">（与 App 的「可买」同口径）</span></span></div>`}
       ${r.rr !== undefined ? `<div class="kv"><span class="k">盈亏比</span><span class="v">
         <b>${r.rr}</b>（目标 ${r.target}，可赚 ${r.reward} 元 / +${r.target_gain_pct}%）</span></div>` : ''}
     </div>
     ${(r.warnings || []).length ? `<div class="warn-box mt">
       <b>需要注意</b><ul style="margin:6px 0 0 18px">
       ${r.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}`;
+}
+
+async function doCapacity() {
+  const el = $('#capResult');
+  if (!el) return;
+  const sym = ($('#capSymbol').value || '').trim().toUpperCase();
+  if (!sym) { toast('请输入标的', 'err'); return; }
+  try {
+    const d = await api('/trades/capacity?symbol=' + encodeURIComponent(sym));
+    el.innerHTML = `<div class="kv-list">
+      <div class="kv"><span class="k">现价</span><span class="v">${d.price}
+        <span class="muted">（${esc(d.price_source)}）</span></span></div>
+      <div class="kv"><span class="k">可用资金</span><span class="v">${d.available_cash}</span></div>
+      <div class="kv"><span class="k">能买多少</span><span class="v">
+        <b style="font-size:15px">${d.affordable_shares}</b> 股（${d.lots} 手）</span></div>
+      <div class="kv"><span class="k">占用 / 余额</span><span class="v">${d.cost} / ${d.leftover} 元</span></div>
+    </div>
+    <div class="muted mt-sm" style="font-size:11px">${esc(d.note)}
+      　注意：这是「买得起多少」，不是「该买多少」—— 该买多少由风险预算决定，
+      两者取小才是可执行数量。</div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="warn-box">${esc(e.message)}</div>`;
+  }
 }
 
 async function doCalc() {
@@ -2416,6 +2447,7 @@ function bind() {
   }
 
   $('#tcCalcBtn').onclick = () => doCalc();
+  $('#capBtn').onclick = () => doCapacity();
   $('#sheetCopyBtn').onclick = async () => {
     const t = (S.orderSheet && S.orderSheet.text) || '';
     if (!t) { toast('清单还没生成', 'err'); return; }

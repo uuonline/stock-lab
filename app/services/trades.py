@@ -93,7 +93,8 @@ def _f(v: Any) -> float | None:
 def calc_position(capital: float, risk_pct: float, entry: float,
                   stop: float, target: float | None = None,
                   max_position_pct: float = POSITION_WARN_PCT,
-                  available_cash: float | None = None) -> dict[str, Any]:
+                  available_cash: float | None = None,
+                  current_price: float | None = None) -> dict[str, Any]:
     """由「能亏多少」反推「该买多少」。
 
     公式：股数 = 总资金 × 单笔风险% ÷ |入场价 − 止损价|
@@ -132,23 +133,29 @@ def calc_position(capital: float, risk_pct: float, entry: float,
     afford = affordable_shares(e, available_cash)
     if afford is not None and shares_rounded > afford:
         warn.append(
-            f"按风险算需要 {shares_rounded} 股（{shares_rounded * e:.0f} 元），"
-            f"但可用资金 {available_cash:.0f} 元只够买 {afford} 股 —— "
-            f"要么减少股数（实际风险会低于预算），要么补充资金"
+            f"这只股票按风险预算需要 {shares_rounded} 股（{shares_rounded * e:.0f} 元），"
+            f"但账户可用资金 {available_cash:.0f} 元只够 {afford} 股 —— "
+            f"已按资金给出可下单股数；实际风险会低于你设定的 {rp:.2f}% 预算"
         )
-        if afford > 0:
-            warn.append(
-                f"若买 {afford} 股，实际最大亏损 "
-                f"{afford * per_share_risk:.0f} 元"
-                f"（占总资金 {afford * per_share_risk / cap * 100:.2f}%），"
-                f"低于你设定的 {rp:.2f}% 预算"
-            )
     cost = shares_rounded * e
     if cost > cap:
         warn.append(f"所需资金 {cost:.0f} 超过总资金 {cap:.0f}，不可行")
     if cap and cost / cap * 100 > max_position_pct:
         warn.append(f"该仓位占总资金 {cost / cap * 100:.1f}%，"
                     f"超过建议上限 {max_position_pct:.0f}%")
+
+    # ---- 直接给出"这笔最多能下多少股" ----
+    #
+    # 之前只给按风险算出的股数，然后警告"买不起" —— 等于把减法留给用户。
+    # 正确的做法是把两个约束取小值，直接给可执行的数字，并说明是哪个约束卡住的。
+    cur = _f(current_price)
+    afford_cur = affordable_shares(cur, available_cash) if cur else None
+    binding = "风险预算"
+    final = shares_rounded
+    if afford is not None and afford < final:
+        final, binding = afford // 100 * 100, "账户资金"
+    if final < 0:
+        final = 0
 
     out: dict[str, Any] = {
         "ok": True,
@@ -157,18 +164,23 @@ def calc_position(capital: float, risk_pct: float, entry: float,
         "risk_amount": round(risk_amount, 2),
         "entry": e, "stop": s,
         "stop_distance_pct": round((e - s) / e * 100, 2),
-        "shares": shares_rounded,
-        "lots": lots,
-        "cost": round(cost, 2),
-        "position_pct": round(cost / cap * 100, 2) if cap else None,
-        "max_loss": round(shares_rounded * per_share_risk, 2),
-        "affordable_shares": afford,
+        "shares": shares_rounded,                 # 按风险预算算出的
+        "final_shares": final,                    # 实际可下单（两个约束取小）
+        "binding": binding,                       # 哪个约束卡住了
+        "lots": final // 100,
+        "cost": round(final * e, 2),
+        "position_pct": round(final * e / cap * 100, 2) if cap else None,
+        "max_loss": round(final * per_share_risk, 2),
+        "actual_risk_pct": round(final * per_share_risk / cap * 100, 2) if cap else None,
+        "affordable_shares": afford,              # 按入场价
+        "affordable_at_current": afford_cur,      # 按现价
+        "current_price": cur,
         "available_cash": _f(available_cash),
         "warnings": warn,
     }
     t = _f(target)
     if t and t > e:
-        reward = shares_rounded * (t - e)
+        reward = final * (t - e)
         out.update({
             "target": t,
             "reward": round(reward, 2),
@@ -503,4 +515,50 @@ def stats() -> dict[str, Any]:
         "note": ("期望值为正需要「胜率 × 盈亏比 > 1」。"
                  "只看胜率容易被误导：胜率 30% 但盈亏比 3 倍是赚钱的，"
                  "胜率 70% 但盈亏比 0.3 倍是亏钱的。"),
+    }
+
+
+def capacity(symbol: str, cash: float | None = None,
+             price: float | None = None) -> dict[str, Any]:
+    """「按我的钱和现在的价格，能买多少股」。
+
+    这是下单前的一个快速容量检查：不涉及止损和目标，只回答一个问题 ——
+    这个价位上，我的账户能吃下多少。
+
+    注意和仓位计算的分工：**这里算的是"买得起多少"，不是"该买多少"**。
+    该买多少由风险预算决定（calc_position），两者取小才是可执行的数量。
+    """
+    from ..sources import market
+    sym = market.normalize(symbol)
+    cash_v = _f(cash)
+    if cash_v is None:
+        cash_v = (get_settings() or {}).get("available_cash")
+    px = _f(price)
+    src = "手动指定"
+    if px is None:
+        try:
+            q = market.get_quote(sym) or {}
+            px = _f(q.get("price"))
+            src = "实时行情"
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "reason": f"取现价失败: {exc}"}
+    if not px:
+        return {"ok": False, "reason": "拿不到价格"}
+    if not cash_v:
+        return {"ok": False, "reason": "未设置可用资金（在交易页填一次即可）",
+                "price": px}
+
+    shares = affordable_shares(px, cash_v)
+    return {
+        "ok": True,
+        "symbol": sym,
+        "price": px,
+        "price_source": src,
+        "available_cash": cash_v,
+        "affordable_shares": shares,
+        "lots": (shares or 0) // 100,
+        "cost": round((shares or 0) * px, 2),
+        "leftover": round(cash_v - (shares or 0) * px, 2),
+        "note": ("A股买入需 100 股整数倍，所以有余额剩下是正常的"
+                 if shares else "资金不足一手（100 股）"),
     }

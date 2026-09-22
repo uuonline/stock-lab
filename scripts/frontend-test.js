@@ -635,7 +635,7 @@ function bad(name, detail) {
       $('#tcStop').value = '23.60';
       $('#tcTarget').value = '25.48';
       $('#tcCalcBtn').click();
-      await waitFor(() => $('#tcResult').textContent.includes('建议股数'), 20000)
+      await waitFor(() => $('#tcResult').textContent.includes('可下单股数'), 20000)
         ? ok('仓位计算器可用') : bad('仓位计算器无结果');
       const cr = $('#tcResult').textContent;
       // 100000 × 2% ÷ (24.64−23.60) = 1923 → 取整到 19 手 = 1900 股
@@ -655,10 +655,24 @@ function bad(name, detail) {
       const cr2 = $('#tcResult').textContent;
       cr2.includes('400') ? ok('可买股数计算正确（1 万 ÷ 24.64 → 400 股）')
                           : bad('可买股数不正确', cr2.slice(0, 90));
-      cr2.includes('不够') ? ok('买不起时明确标出不够') : bad('未标出资金不足');
+      cr2.includes('受「账户资金」限制') ? ok('买不起时标出约束来源') : bad('未标出资金约束');
       // 砍到可买数之后实际风险变小，必须说明 —— 否则用户以为还是 2% 预算
-      cr2.includes('实际最大亏损') ? ok('说明减量后的实际风险') : bad('未说明实际风险变化');
+      cr2.includes('实际占总资金') ? ok('说明缩减后的实际风险') : bad('未说明实际风险变化');
+      // 结果必须以「可下单股数」为主：直接给可执行数字，而不是给个建议再让用户自己比
+      cr2.includes('可下单股数') ? ok('主结果给「可下单股数」') : bad('未给可下单股数');
+      cr2.includes('受「账户资金」限制') ? ok('说明是哪个约束卡住的') : bad('未说明约束来源');
+      cr2.includes('按风险预算') ? ok('保留风险预算口径对照') : bad('缺少风险预算对照');
       $('#tcCash').value = '';
+
+      // 按现价的容量速查
+      $('#capSymbol').value = '002241.SZ';
+      $('#capBtn').click();
+      await waitFor(() => ($('#capResult').textContent || '').includes('能买多少'), 30000)
+        ? ok('能买多少（按现价）可用') : bad('容量速查无结果');
+      const cap = $('#capResult').textContent;
+      cap.includes('现价') && cap.includes('股')
+        ? ok('容量速查给出股数与现价') : bad('容量速查内容不全');
+      cap.includes('买得起多少') ? ok('声明是容量而非建议') : bad('未区分容量与建议');
 
       // 开仓 → 持仓列表
       $('#tSymbol').value = '002241.SZ';

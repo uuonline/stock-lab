@@ -303,6 +303,21 @@
     </div>
 
     <div class="card">
+      <h3>能买多少（按现价）</h3>
+      <p class="muted mt-sm">
+        快速检查：以<b>当前价格</b>和你的可用资金，账户能吃下多少股。
+        买入需 100 股整数倍，所以有余额剩余是正常的。
+      </p>
+      <div class="form-grid mt">
+        <label>标的 <input id="capSymbol" placeholder="002241.SZ"></label>
+      </div>
+      <div class="row-actions mt">
+        <button class="btn primary" id="capBtn">查询</button>
+      </div>
+      <div id="capResult" class="mt"></div>
+    </div>
+
+    <div class="card">
       <h3>开仓记录</h3>
       <p class="muted mt-sm">
         开仓时会<b>自动快照当时的分析状态</b>（箱体位置、异动判定、历史类比）——

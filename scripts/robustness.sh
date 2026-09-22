@@ -228,6 +228,9 @@ check "开仓标的非法被拒"      400 "$BASE/api/trades" -X POST \
       -d '{"symbol":"BOGUS","entry_price":10}'
 
 # 交易与提醒的联动：开仓自动建提醒、平仓自动清理（不能留死规则）
+check "容量查询（按现价）"    200 "$BASE/api/trades/capacity?symbol=002241.SZ&cash=10000"
+check "容量查询缺资金"        400 "$BASE/api/trades/capacity?symbol=002241.SZ&cash=0"
+check "容量查询非法标的"      400 "$BASE/api/trades/capacity?symbol=BOGUS&cash=10000"
 check "交易设置读取"          200 "$BASE/api/trades/settings"
 check "交易设置写入"          200 "$BASE/api/trades/settings" -X POST \
       -H 'Content-Type: application/json' -d '{"available_cash":10000}'
@@ -272,6 +275,9 @@ print(len([a for a in rows if a.get('trade_id') == $tid]))" 2>/dev/null || echo 
   fi
   curl -s -m 30 -X DELETE "$BASE/api/trades/$tid" >/dev/null
 }
+check "容量查询（按现价）"    200 "$BASE/api/trades/capacity?symbol=002241.SZ&cash=10000"
+check "容量查询缺资金"        400 "$BASE/api/trades/capacity?symbol=002241.SZ&cash=0"
+check "容量查询非法标的"      400 "$BASE/api/trades/capacity?symbol=BOGUS&cash=10000"
 check "交易设置读取"          200 "$BASE/api/trades/settings"
 check "交易设置写入"          200 "$BASE/api/trades/settings" -X POST \
       -H 'Content-Type: application/json' -d '{"available_cash":10000}'

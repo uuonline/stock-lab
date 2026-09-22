@@ -747,10 +747,12 @@ class CalcIn(BaseModel):
     target: float | None = Field(default=None, gt=0)
     max_position_pct: float = Field(default=30.0, gt=0, le=100)
     available_cash: float | None = Field(default=None, ge=0)
+    current_price: float | None = Field(default=None, gt=0)
 
 
 class SettingsIn(BaseModel):
     available_cash: float | None = Field(default=None, ge=0)
+    current_price: float | None = Field(default=None, gt=0)
 
 
 @router.get("/trades/settings")
@@ -767,6 +769,23 @@ def trades_settings_set(body: SettingsIn) -> dict:
     return r
 
 
+@router.get("/trades/capacity")
+def trades_capacity(symbol: str, cash: float | None = Query(None, ge=0),
+                    price: float | None = Query(None, gt=0)) -> dict:
+    """按可用资金和当前价格算「能买多少股」。
+
+    这是下单前的容量检查：只回答"买得起多少"，
+    不回答"该买多少"（那个由风险预算决定，见 /trades/calc）。
+    """
+    try:
+        r = trade_svc.capacity(symbol, cash, price)
+    except SymbolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("reason") or "无法计算")
+    return r
+
+
 @router.post("/trades/calc")
 def trades_calc(body: CalcIn) -> dict:
     """由「能亏多少」反推「该买多少」。
@@ -780,7 +799,7 @@ def trades_calc(body: CalcIn) -> dict:
         cash = (trade_svc.get_settings() or {}).get("available_cash")
     r = trade_svc.calc_position(
         body.capital, body.risk_pct, body.entry, body.stop,
-        body.target, body.max_position_pct, cash,
+        body.target, body.max_position_pct, cash, body.current_price,
     )
     # 参数语义无效（比如止损高于入场价）属于客户端错误，应当 400，
     # 不能返回 200 + ok:false —— 那样调用方按状态码判断就会误以为成功。
