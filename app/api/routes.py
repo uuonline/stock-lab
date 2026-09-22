@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from .. import db
@@ -16,6 +16,7 @@ from ..services import backtest as bt_svc
 from ..services import analogs as analogs_svc
 from ..services import anomaly as anomaly_svc
 from ..services import box as box_svc
+from ..services import chatbot as chat_svc
 from ..services import flow as flow_svc
 from ..services import indicators as ta
 from ..services import notify as notify_svc
@@ -927,3 +928,60 @@ def order_sheet(watchlist: int = Query(1, ge=0, le=1)) -> dict:
     下单动作始终由用户在自己的 App 里完成。
     """
     return sheet_svc.build(include_watchlist=bool(watchlist))
+
+
+@router.post("/chat/hook")
+async def chat_hook(request: Request) -> dict:
+    """群晖 Chat「传出 Webhook」的接收端。
+
+    在 Chat 频道里发一条命令，群晖把消息 POST 到这里，
+    我们把结果作为 `text` 返回，群晖就会把它发回频道。
+
+    安全策略（fail closed）：
+      · 必须配置 SL_CHAT_TOKEN，且与请求里的 token 一致，否则拒绝 ——
+        没有校验的话，频道里任何人都能查到你的持仓和自选
+      · 命令**全部只读**：不能下单、不能改设置、不能删记录。
+        万一 token 泄露，最坏是别人看到行情，而不是动你的数据
+    """
+    # 手动解析 body，不用 request.form() —— 那需要 python-multipart 依赖，
+    # 而这里只需要读几个字段，不值得为它加一个包（也少一次重建风险）。
+    import json as _json
+    from urllib.parse import parse_qs
+
+    raw = await request.body()
+    ctype = (request.headers.get("content-type") or "").lower()
+    fields: dict[str, str] = {}
+    try:
+        if "json" in ctype:
+            obj = _json.loads(raw or b"{}")
+            fields = {k: str(v) for k, v in (obj or {}).items()}
+        else:
+            fields = {k: v[0] for k, v in
+                      parse_qs(raw.decode("utf-8", "ignore")).items() if v}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"请求体解析失败: {exc}") from exc
+
+    provided = fields.get("token") or ""
+    expected = settings.chat_token
+    if not expected:
+        log.warning("群晖 Chat 传出 Webhook 被调用，但未配置 SL_CHAT_TOKEN，已拒绝")
+        raise HTTPException(403, "未配置 SL_CHAT_TOKEN，Chat 命令接口未启用")
+    if provided != expected:
+        log.warning("群晖 Chat 传出 Webhook token 不匹配，已拒绝（来自 %s）",
+                    request.client.host if request.client else "?")
+        raise HTTPException(403, "token 不匹配")
+
+    text = fields.get("text") or ""
+    trigger = fields.get("trigger_word") or ""
+    # 有些版本会把触发词一起放进 text，剥掉它命令才好解析
+    if trigger and text.startswith(trigger):
+        text = text[len(trigger):].strip()
+    user = fields.get("username") or ""
+
+    from ..services import chatbot
+    try:
+        reply = chatbot.handle(text, user)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Chat 命令执行失败: %s", exc, exc_info=True)
+        reply = f"命令执行失败：{exc}"
+    return {"text": reply}

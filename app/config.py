@@ -139,6 +139,10 @@ class Settings:
     # 群晖默认用自签名证书，所以默认不校验；要严格校验就设为 1
     notify_synology_verify: bool = field(
         default_factory=lambda: _env("SL_NOTIFY_SYNOLOGY_VERIFY", "0") == "1")
+    # 群晖 Chat 传出 Webhook 的 token：在 Chat 里发命令查系统时校验用。
+    # 留空则**拒绝所有请求**（fail closed）—— 没有这个校验，
+    # 频道里任何人都能查你的持仓和自选。
+    chat_token: str = field(default_factory=lambda: _env("SL_CHAT_TOKEN", ""))
 
     # ---- 调度 ----
     scheduler_enabled: bool = field(default_factory=lambda: _env_bool("SL_SCHEDULER_ENABLED", True))

@@ -94,6 +94,8 @@ services:
       # 群晖 Chat：频道 → 整合 → 传入 Webhook
       SL_NOTIFY_SYNOLOGY_CHAT: ${SL_NOTIFY_SYNOLOGY_CHAT:-}
       SL_NOTIFY_SYNOLOGY_VERIFY: "${SL_NOTIFY_SYNOLOGY_VERIFY:-0}"
+      # 群晖 Chat 传出 Webhook（在 Chat 里发命令查系统）
+      SL_CHAT_TOKEN: ${SL_CHAT_TOKEN:-}
 
       # ---- 回测默认成本 ----
       SL_COMMISSION: "${SL_COMMISSION:-0.00025}"
