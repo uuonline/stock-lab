@@ -123,7 +123,7 @@ function bad(name, detail) {
   const tabs = $$('.tab').map(t => t.dataset.view);
   // 不写死数量：加栏目是正常迭代，写死会变成每次都要改测试。
   // 真正要保证的是「必有的几个栏目都在」+「每个标签都有对应视图」。
-  const mustHave = ['dashboard', 'watchlist', 'detail', 'screener', 'flow', 'anomaly', 'backtest', 'alerts', 'settings'];
+  const mustHave = ['dashboard', 'watchlist', 'detail', 'screener', 'flow', 'anomaly', 'trades', 'backtest', 'alerts', 'settings'];
   const missing = mustHave.filter(v => !tabs.includes(v));
   missing.length === 0 ? ok('标签页渲染齐全', tabs.join(','))
                        : bad('缺少栏目', missing.join(','));
@@ -616,6 +616,63 @@ function bad(name, detail) {
         ok('历史类比不可用（样本不足，属正常降级）', at2.slice(0, 40));
       } else {
         bad('历史类比区域缺失或未渲染', JSON.stringify(at2.slice(0, 60)));
+      }
+    }
+  }
+
+  // ---- 交易日志与仓位计算 ----
+  {
+    const tabT = window.document.querySelector('.tab[data-view="trades"]');
+    tabT ? ok('存在「交易」标签') : bad('缺少交易标签');
+    if (tabT) {
+      tabT.click();
+      await sleep(500);
+
+      // 仓位计算器：先定「能亏多少」再反推股数
+      $('#tcCapital').value = '100000';
+      $('#tcRisk').value = '2';
+      $('#tcEntry').value = '24.64';
+      $('#tcStop').value = '23.60';
+      $('#tcTarget').value = '25.48';
+      $('#tcCalcBtn').click();
+      await waitFor(() => $('#tcResult').textContent.includes('建议股数'), 20000)
+        ? ok('仓位计算器可用') : bad('仓位计算器无结果');
+      const cr = $('#tcResult').textContent;
+      // 100000 × 2% ÷ (24.64−23.60) = 1923 → 取整到 19 手 = 1900 股
+      cr.includes('1900') ? ok('仓位计算正确（1900 股）', cr.match(/建议股数\s*(\d+)/) ? cr.match(/建议股数\s*(\d+)/)[1] : '')
+                          : bad('仓位计算不正确', cr.slice(0, 80));
+      cr.includes('单笔最大亏损') ? ok('显示最大亏损') : bad('缺少最大亏损');
+      cr.includes('盈亏比') ? ok('显示盈亏比') : bad('缺少盈亏比');
+      // 这笔盈亏比只有 0.81，必须给出警告而不是默默通过
+      cr.includes('需要注意') ? ok('赔率不佳时给出警告') : bad('赔率警告缺失');
+
+      // 开仓 → 持仓列表
+      $('#tSymbol').value = '002241.SZ';
+      $('#tEntry').value = '24.64';
+      $('#tShares').value = '600';
+      $('#tStop').value = '23.60';
+      $('#tReason').value = '自动化测试';
+      $('#tOpenBtn').click();
+      await waitFor(() => $('#openTrades').textContent.includes('002241.SZ'), 60000)
+        ? ok('开仓记录并出现在持仓中') : bad('开仓记录未出现');
+      // 开仓必须带分析快照
+      const ot = $('#openTrades').textContent;
+      /箱体位置|异动/.test(ot) ? ok('开仓时快照了分析状态') : bad('开仓快照缺失');
+
+      // 清理：测试不能往真实的交易日志里留记录。
+      // 用 reason 标记识别自己造的数据，跑完就删掉。
+      try {
+        const all = await fetch(BASE + '/api/trades?status=open').then(r => r.json());
+        for (const row of (all.rows || [])) {
+          if ((row.reason || '') === '自动化测试') {
+            await fetch(BASE + '/api/trades/' + row.id, { method: 'DELETE' });
+          }
+        }
+        const after = await fetch(BASE + '/api/trades?status=open').then(r => r.json());
+        const left = (after.rows || []).filter(r => (r.reason || '') === '自动化测试').length;
+        left === 0 ? ok('测试数据已清理（不污染交易日志）') : bad('测试数据残留', String(left));
+      } catch (e) {
+        bad('测试数据清理失败', e.message);
       }
     }
   }

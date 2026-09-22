@@ -19,6 +19,7 @@ from ..services import box as box_svc
 from ..services import flow as flow_svc
 from ..services import indicators as ta
 from ..services import notify as notify_svc
+from ..services import trades as trade_svc
 from ..services import quote as quote_svc
 from ..services import screener as screen_svc
 from ..sources import alphavantage as alphavantage_src
@@ -714,3 +715,92 @@ def get_analogs(symbol: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         log.warning("历史类比失败 %s: %s", sym, exc)
         return {"ok": False, "reason": f"历史类比计算失败: {exc}"}
+
+
+# ---------------- 交易日志与仓位计算 ----------------
+
+class TradeIn(BaseModel):
+    symbol: str
+    entry_price: float = Field(gt=0)
+    shares: float = Field(default=0, ge=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    target_price: float | None = Field(default=None, gt=0)
+    reason: str = ""
+    note: str = ""
+    entry_date: str | None = None
+    name: str = ""
+
+
+class CloseIn(BaseModel):
+    exit_price: float = Field(gt=0)
+    exit_date: str | None = None
+    note: str = ""
+
+
+class CalcIn(BaseModel):
+    capital: float = Field(gt=0)
+    risk_pct: float = Field(gt=0, le=100)
+    entry: float = Field(gt=0)
+    stop: float = Field(gt=0)
+    target: float | None = Field(default=None, gt=0)
+    max_position_pct: float = Field(default=30.0, gt=0, le=100)
+
+
+@router.post("/trades/calc")
+def trades_calc(body: CalcIn) -> dict:
+    """由「能亏多少」反推「该买多少」。
+
+    顺序很重要：先定单笔风险，再反推股数。
+    先决定买多少再看能亏多少，几乎必然失控。
+    """
+    r = trade_svc.calc_position(
+        body.capital, body.risk_pct, body.entry, body.stop,
+        body.target, body.max_position_pct,
+    )
+    # 参数语义无效（比如止损高于入场价）属于客户端错误，应当 400，
+    # 不能返回 200 + ok:false —— 那样调用方按状态码判断就会误以为成功。
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("reason") or "参数无效")
+    return r
+
+
+@router.get("/trades")
+def list_trades(status: str | None = Query(None, pattern="^(open|closed)$"),
+                limit: int = Query(200, ge=1, le=1000)) -> dict:
+    return {"rows": trade_svc.list_trades(status, limit)}
+
+
+@router.get("/trades/stats")
+def trades_stats() -> dict:
+    """按入场理由分组的复盘统计。
+
+    只看总胜率意义不大，真正要回答的是「哪一类入场理由对我有效」。
+    """
+    return trade_svc.stats()
+
+
+@router.post("/trades")
+def create_trade(body: TradeIn) -> dict:
+    try:
+        return trade_svc.open_trade(
+            body.symbol, body.entry_price, body.shares, body.stop_price,
+            body.target_price, body.reason, body.note, body.entry_date, body.name,
+        )
+    except SymbolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/trades/{trade_id}/close")
+def close_trade(trade_id: int, body: CloseIn) -> dict:
+    r = trade_svc.close_trade(trade_id, body.exit_price, body.exit_date, body.note)
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("reason") or "平仓失败")
+    return r
+
+
+@router.delete("/trades/{trade_id}")
+def delete_trade(trade_id: int) -> dict:
+    r = trade_svc.delete_trade(trade_id)
+    if not r.get("ok"):
+        raise HTTPException(404, "找不到该交易")
+    return r

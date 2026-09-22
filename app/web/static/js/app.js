@@ -269,6 +269,7 @@ function render() {
         $('#anomalySymbol').value = S.detailSymbol;
       }
       return;
+    case 'trades':    return loadTrades();
     case 'backtest':  return initBacktest();
     case 'alerts':    return loadAlerts();
     case 'settings':  return loadSettings();
@@ -2205,6 +2206,150 @@ async function loadAnalogs(sym) {
   }
 }
 
+
+/* ============ 交易日志与仓位计算 ============ */
+function renderCalc(r) {
+  const el = $('#tcResult');
+  if (!el) return;
+  if (!r || !r.ok) { el.innerHTML = `<div class="warn-box">${esc((r && r.reason) || '计算失败')}</div>`; return; }
+  el.innerHTML = `
+    <div class="kv-list">
+      <div class="kv"><span class="k">建议股数</span><span class="v"><b>${r.shares}</b> 股（${r.lots} 手）</span></div>
+      <div class="kv"><span class="k">占用资金</span><span class="v">${r.cost} 元（占总资金 ${r.position_pct}%）</span></div>
+      <div class="kv"><span class="k">单笔最大亏损</span><span class="v down">${r.max_loss} 元
+        （风险预算 ${r.risk_amount} 元）</span></div>
+      <div class="kv"><span class="k">止损距离</span><span class="v">${r.stop_distance_pct}%</span></div>
+      ${r.rr !== undefined ? `<div class="kv"><span class="k">盈亏比</span><span class="v">
+        <b>${r.rr}</b>（目标 ${r.target}，可赚 ${r.reward} 元 / +${r.target_gain_pct}%）</span></div>` : ''}
+    </div>
+    ${(r.warnings || []).length ? `<div class="warn-box mt">
+      <b>需要注意</b><ul style="margin:6px 0 0 18px">
+      ${r.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}`;
+}
+
+async function doCalc() {
+  const body = {
+    capital: Number($('#tcCapital').value),
+    risk_pct: Number($('#tcRisk').value),
+    entry: Number($('#tcEntry').value),
+    stop: Number($('#tcStop').value),
+  };
+  const t = Number($('#tcTarget').value);
+  if (t) body.target = t;
+  try { renderCalc(await api('/trades/calc', { method: 'POST', body })); }
+  catch (e) { renderCalc({ ok: false, reason: e.message }); }
+}
+
+const TR_COLS = ['标的', '入场', '股数', '止损', '目标', '现价/平仓', '盈亏', 'R', '持有', '理由', ''];
+
+function tradeRows(rows, isOpen) {
+  if (!rows.length) return `<tbody><tr><td class="muted">暂无记录</td></tr></tbody>`;
+  return `<thead><tr>${TR_COLS.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+  <tbody>${rows.map(r => {
+    const pnl = r.pnl;
+    const cls = pnl > 0 ? 'up' : (pnl < 0 ? 'down' : '');
+    const snap = r.snapshot || {};
+    const snapTip = snap.box
+      ? `箱体位置 ${snap.box.position_pct}% · ${snap.box.shape || ''}${snap.anomaly && snap.anomaly.level_name ? ' · 异动 ' + snap.anomaly.level_name : ''}`
+      : '无快照';
+    return `<tr>
+      <td><span class="link" data-sym="${esc(r.symbol)}">${esc(r.name || r.symbol)}</span>
+        <div class="muted" style="font-size:10px">${esc(r.symbol)}</div></td>
+      <td class="num">${fn(r.entry_price)}<div class="muted" style="font-size:10px">${esc(String(r.entry_date).slice(0,10))}</div></td>
+      <td class="num">${fn(r.shares)}</td>
+      <td class="num">${r.stop_price === null ? '—' : fn(r.stop_price)}</td>
+      <td class="num">${r.target_price === null ? '—' : fn(r.target_price)}</td>
+      <td class="num">${isOpen ? fn(r.last_price) : fn(r.exit_price)}
+        ${!isOpen && r.exit_date ? `<div class="muted" style="font-size:10px">${esc(String(r.exit_date).slice(0,10))}</div>` : ''}</td>
+      <td class="num ${cls}">${pnl === undefined || pnl === null ? '—' : (pnl > 0 ? '+' : '') + pnl}
+        <div style="font-size:10px">${r.pnl_pct === undefined || r.pnl_pct === null ? '' : (r.pnl_pct > 0 ? '+' : '') + r.pnl_pct + '%'}</div></td>
+      <td class="num">${r.r_multiple === undefined || r.r_multiple === null ? '—' : r.r_multiple}</td>
+      <td class="num">${r.hold_days === undefined || r.hold_days === null ? '—' : r.hold_days + ' 天'}</td>
+      <td>${esc(r.reason || '—')}
+        <div class="muted" style="font-size:10px" title="${esc(snapTip)}">${esc(snapTip.slice(0, 26))}</div></td>
+      <td>${isOpen
+        ? `<button class="btn" data-close="${r.id}">平仓</button>`
+        : `<button class="btn" data-del="${r.id}">删除</button>`}</td>
+    </tr>`;
+  }).join('')}</tbody>`;
+}
+
+function renderStats(st) {
+  const el = $('#tradesStats');
+  if (!el) return;
+  if (!st || !st.ok) { el.innerHTML = `<div class="card"><h3>复盘统计</h3>
+    <div class="muted mt-sm">${esc((st && st.note) || '暂无数据')}</div></div>`; return; }
+  const o = st.overall || {};
+  const kv = (k, v, cls) => `<div class="kv"><span class="k">${k}</span>
+    <span class="v ${cls || ''}">${v}</span></div>`;
+  el.innerHTML = `<div class="card">
+    <div class="card-head">
+      <h3>复盘统计</h3>
+      <span class="muted" style="font-size:12px">持仓 ${st.open} 笔 · 已平 ${st.closed} 笔</span>
+    </div>
+    <div class="kv-list mt-sm">
+      ${kv('胜率', o.win_rate === null ? '—' : o.win_rate + '%')}
+      ${kv('平均盈利 / 平均亏损', `${o.avg_win === null ? '—' : o.avg_win} / ${o.avg_loss === null ? '—' : o.avg_loss}`)}
+      ${kv('盈亏比', o.profit_factor === null ? '—' : o.profit_factor, 'up')}
+      ${kv('期望值（每笔平均盈亏）', o.expectancy === null ? '—' : o.expectancy, o.expectancy > 0 ? 'up' : 'down')}
+      ${kv('平均 R 倍数', o.avg_r === null ? '—' : o.avg_r)}
+      ${kv('平均持有天数', o.avg_hold_days === null ? '—' : o.avg_hold_days + ' 天')}
+      ${kv('最好 / 最差', `${o.best === null ? '—' : o.best} / ${o.worst === null ? '—' : o.worst}`)}
+    </div>
+    <div class="muted mt-sm" style="font-size:11px">${esc(st.note || '')}</div>
+    ${(st.groups || []).length ? `
+      <h3 class="mt" style="font-size:13px">按入场理由分组（这才是复盘要看的）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>入场理由</th><th>笔数</th><th>胜率</th><th>盈亏比</th>
+          <th>期望值</th><th>平均R</th><th>合计盈亏</th></tr></thead>
+        <tbody>${st.groups.map(g => `<tr>
+          <td>${esc(g.reason)}</td><td class="num">${g.count}</td>
+          <td class="num">${g.win_rate === null ? '—' : g.win_rate + '%'}</td>
+          <td class="num">${g.profit_factor === null ? '—' : g.profit_factor}</td>
+          <td class="num ${g.expectancy > 0 ? 'up' : 'down'}">${g.expectancy === null ? '—' : g.expectancy}</td>
+          <td class="num">${g.avg_r === null ? '—' : g.avg_r}</td>
+          <td class="num ${g.total_pnl > 0 ? 'up' : 'down'}">${g.total_pnl === null ? '—' : g.total_pnl}</td>
+        </tr>`).join('')}</tbody></table></div>
+      <div class="muted mt-sm" style="font-size:11px">
+        分组的意义：如果某个入场理由的期望值持续为负，问题不在运气，在那个理由本身。</div>` : ''}
+  </div>`;
+}
+
+async function loadTrades() {
+  try {
+    const [o, c, st] = await Promise.all([
+      api('/trades?status=open'), api('/trades?status=closed'), api('/trades/stats'),
+    ]);
+    const ot = $('#openTrades'), ct = $('#closedTrades');
+    if (ot) ot.innerHTML = tradeRows(o.rows || [], true);
+    if (ct) ct.innerHTML = tradeRows(c.rows || [], false);
+    renderStats(st);
+  } catch (e) {
+    toast('交易记录加载失败：' + e.message, 'err');
+  }
+}
+
+async function openTrade() {
+  const body = {
+    symbol: ($('#tSymbol').value || '').trim().toUpperCase(),
+    entry_price: Number($('#tEntry').value),
+    shares: Number($('#tShares').value) || 0,
+    reason: ($('#tReason').value || '').trim(),
+    note: ($('#tNote').value || '').trim(),
+  };
+  const st = Number($('#tStop').value), tg = Number($('#tTarget').value);
+  if (st) body.stop_price = st;
+  if (tg) body.target_price = tg;
+  if (!body.symbol || !body.entry_price) { toast('请填标的和入场价', 'err'); return; }
+  try {
+    await api('/trades', { method: 'POST', body });
+    toast('已记录开仓，并快照了当时的分析状态', 'ok');
+    ['tSymbol', 'tEntry', 'tShares', 'tStop', 'tTarget', 'tReason', 'tNote']
+      .forEach(id => { const e = $('#' + id); if (e) e.value = ''; });
+    loadTrades();
+  } catch (e) { toast('记录失败：' + e.message, 'err'); }
+}
+
 function bind() {
   $('#tabs').onclick = (e) => {
     const t = e.target.closest('.tab');
@@ -2236,6 +2381,31 @@ function bind() {
       runFlow(S.detailSymbol);
     };
   }
+
+  $('#tcCalcBtn').onclick = () => doCalc();
+  $('#tOpenBtn').onclick = () => openTrade();
+  // 事件委托绑在**两个表格**上（没有 id=trades 这个元素，
+  // 之前写错会导致 bind() 抛错、整个页面的交互全失效）
+  const tradeClick = async (e) => {
+    const c = e.target.closest('[data-close]'), d = e.target.closest('[data-del]');
+    if (c) {
+      const p = window.prompt('平仓价：');
+      if (!p) return;
+      try {
+        await api('/trades/' + c.dataset.close + '/close',
+                  { method: 'POST', body: { exit_price: Number(p) } });
+        toast('已平仓', 'ok'); loadTrades();
+      } catch (err) { toast('平仓失败：' + err.message, 'err'); }
+    } else if (d) {
+      if (!window.confirm('删除这条记录？')) return;
+      try { await api('/trades/' + d.dataset.del, { method: 'DELETE' }); loadTrades(); }
+      catch (err) { toast('删除失败：' + err.message, 'err'); }
+    }
+  };
+  ['#openTrades', '#closedTrades'].forEach(sel => {
+    const t = $(sel);
+    if (t) t.addEventListener('click', tradeClick);
+  });
 
   $('#anomalyRunBtn').onclick = () => {
     runAnomaly(($('#anomalySymbol').value || '').trim().toUpperCase());

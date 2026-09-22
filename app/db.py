@@ -114,6 +114,33 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
+-- 交易日志
+--
+-- 设计要点：**开仓时把当时的分析状态快照下来**（snapshot 字段）。
+-- 没有这个，事后只能看到"赚了还是亏了"，看不到"当时我是基于什么判断的" ——
+-- 而复盘的价值恰恰在于检验判断本身，不在于记录结果。
+CREATE TABLE IF NOT EXISTS trades (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol       TEXT NOT NULL,
+    name         TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'open',      -- open / closed
+    entry_date   TEXT NOT NULL,
+    entry_price  REAL NOT NULL,
+    shares       REAL NOT NULL DEFAULT 0,
+    stop_price   REAL,                              -- 止损价（开仓前就定）
+    target_price REAL,                              -- 目标价
+    exit_date    TEXT,
+    exit_price   REAL,
+    reason       TEXT NOT NULL DEFAULT '',          -- 入场理由标签
+    note         TEXT NOT NULL DEFAULT '',
+    snapshot     TEXT NOT NULL DEFAULT '{}',        -- 开仓时的分析快照 JSON
+    plan         TEXT NOT NULL DEFAULT '{}',        -- 当时的交易计划 JSON
+    created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
+
 -- 筛选器保存的方案
 CREATE TABLE IF NOT EXISTS screens (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -202,6 +202,30 @@ check_has "类比返回持有期"  '"horizons"' "$BASE/api/analogs/002241.SZ"
 check_has "类比返回独立事件数" '"independent"' "$BASE/api/analogs/002241.SZ"
 check_has "类比返回样本内外" '"out_sample"' "$BASE/api/analogs/002241.SZ"
 check_has "类比声明非预测"  '不是预测' "$BASE/api/analogs/002241.SZ"
+
+echo
+echo "── 交易日志与仓位计算 ──"
+check "持仓列表"              200 "$BASE/api/trades"
+check "复盘统计"              200 "$BASE/api/trades/stats"
+check "仓位计算"              200 "$BASE/api/trades/calc" -X POST \
+      -H 'Content-Type: application/json' \
+      -d '{"capital":100000,"risk_pct":2,"entry":24.64,"stop":23.60}'
+# 止损高于入场价必须被拒（本系统只做多）
+check "止损高于入场被拒"      400 "$BASE/api/trades/calc" -X POST \
+      -H 'Content-Type: application/json' \
+      -d '{"capital":100000,"risk_pct":2,"entry":10,"stop":11}'
+check "资金为负被拒"          422 "$BASE/api/trades/calc" -X POST \
+      -H 'Content-Type: application/json' \
+      -d '{"capital":-1,"risk_pct":2,"entry":10,"stop":9}'
+check "风险比例越界被拒"      422 "$BASE/api/trades/calc" -X POST \
+      -H 'Content-Type: application/json' \
+      -d '{"capital":1000,"risk_pct":999,"entry":10,"stop":9}'
+check "平仓不存在的记录"      400 "$BASE/api/trades/999999/close" -X POST \
+      -H 'Content-Type: application/json' -d '{"exit_price":10}'
+check "删除不存在的记录"      404 "$BASE/api/trades/999999" -X DELETE
+check "开仓标的非法被拒"      400 "$BASE/api/trades" -X POST \
+      -H 'Content-Type: application/json' \
+      -d '{"symbol":"BOGUS","entry_price":10}' 
 check_has "数据包含提示词原文" \
   '请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。' \
   "$BASE/api/flow/002241.SZ/pack"
