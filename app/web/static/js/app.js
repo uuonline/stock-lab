@@ -2318,6 +2318,18 @@ function renderStats(st) {
   </div>`;
 }
 
+async function loadOrderSheet() {
+  const el = $('#orderSheet');
+  if (!el) return;
+  try {
+    const d = await api('/order-sheet');
+    S.orderSheet = d;
+    el.textContent = d.text;
+  } catch (e) {
+    el.textContent = '清单生成失败：' + e.message;
+  }
+}
+
 async function loadTrades() {
   try {
     const [o, c, st] = await Promise.all([
@@ -2327,6 +2339,7 @@ async function loadTrades() {
     if (ot) ot.innerHTML = tradeRows(o.rows || [], true);
     if (ct) ct.innerHTML = tradeRows(c.rows || [], false);
     renderStats(st);
+    loadOrderSheet();
   } catch (e) {
     toast('交易记录加载失败：' + e.message, 'err');
   }
@@ -2386,6 +2399,14 @@ function bind() {
   }
 
   $('#tcCalcBtn').onclick = () => doCalc();
+  $('#sheetCopyBtn').onclick = async () => {
+    const t = (S.orderSheet && S.orderSheet.text) || '';
+    if (!t) { toast('清单还没生成', 'err'); return; }
+    try {
+      await copyText(t);
+      toast(`已复制下单清单（${t.length} 字），照着自己 App 里填`, 'ok');
+    } catch (e) { toast('复制失败：' + e.message, 'err'); }
+  };
   $('#tOpenBtn').onclick = () => openTrade();
   // 事件委托绑在**两个表格**上（没有 id=trades 这个元素，
   // 之前写错会导致 bind() 抛错、整个页面的交互全失效）

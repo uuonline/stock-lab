@@ -228,6 +228,11 @@ check "开仓标的非法被拒"      400 "$BASE/api/trades" -X POST \
       -d '{"symbol":"BOGUS","entry_price":10}'
 
 # 交易与提醒的联动：开仓自动建提醒、平仓自动清理（不能留死规则）
+check "下单清单"              200 "$BASE/api/order-sheet"
+check "下单清单不含自选"      200 "$BASE/api/order-sheet?watchlist=0"
+check "下单清单参数越界"      422 "$BASE/api/order-sheet?watchlist=9"
+check_has "清单含免责边界"    '不接券商' "$BASE/api/order-sheet"
+
 TRADE_ALERT_TEST() {
   local tid aid_before aid_after
   aid_before=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d.get("alerts") or d.get("rows") or []))' 2>/dev/null || echo 0)
@@ -262,6 +267,11 @@ print(len([a for a in rows if a.get('trade_id') == $tid]))" 2>/dev/null || echo 
   fi
   curl -s -m 30 -X DELETE "$BASE/api/trades/$tid" >/dev/null
 }
+check "下单清单"              200 "$BASE/api/order-sheet"
+check "下单清单不含自选"      200 "$BASE/api/order-sheet?watchlist=0"
+check "下单清单参数越界"      422 "$BASE/api/order-sheet?watchlist=9"
+check_has "清单含免责边界"    '不接券商' "$BASE/api/order-sheet"
+
 TRADE_ALERT_TEST
 check_has "数据包含提示词原文" \
   '请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。' \

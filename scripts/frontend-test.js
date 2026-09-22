@@ -655,6 +655,20 @@ function bad(name, detail) {
       $('#tOpenBtn').click();
       await waitFor(() => $('#openTrades').textContent.includes('002241.SZ'), 60000)
         ? ok('开仓记录并出现在持仓中') : bad('开仓记录未出现');
+      // 下单清单：必须把参数排成可照着填的字段，且不做新计算
+      await waitFor(() => ($('#orderSheet').textContent || '').includes('下单参数清单'), 30000)
+        ? ok('下单参数清单已生成') : bad('下单清单未生成');
+      const os = $('#orderSheet').textContent;
+      // 字段名必须和券商 App 下单界面的输入框一致：
+      // 股票名称或代码 / 委托价 / 委托量
+      (os.includes('股票名称或代码') && os.includes('委托价') && os.includes('委托量'))
+        ? ok('清单字段对齐 App 下单界面') : bad('清单字段与 App 不一致');
+      os.includes('可买') ? ok('提示与 App 的「可买」对账') : bad('缺少可买对账提示');
+      os.includes('所需资金') ? ok('清单给出所需资金') : bad('缺少所需资金');
+      os.includes('不接券商') ? ok('清单声明不接券商接口') : bad('清单缺少边界声明');
+      /委托用代码/.test(os) ? ok('清单含可粘贴的委托代码') : bad('清单缺少代码列表');
+      $('#sheetCopyBtn') ? ok('清单有复制按钮') : bad('清单缺少复制按钮');
+
       // 开仓必须带分析快照
       const ot = $('#openTrades').textContent;
       /箱体位置|异动/.test(ot) ? ok('开仓时快照了分析状态') : bad('开仓快照缺失');

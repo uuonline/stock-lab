@@ -19,6 +19,7 @@ from ..services import box as box_svc
 from ..services import flow as flow_svc
 from ..services import indicators as ta
 from ..services import notify as notify_svc
+from ..services import ordersheet as sheet_svc
 from ..services import trades as trade_svc
 from ..services import quote as quote_svc
 from ..services import screener as screen_svc
@@ -806,3 +807,14 @@ def delete_trade(trade_id: int) -> dict:
     if not r.get("ok"):
         raise HTTPException(404, "找不到该交易")
     return r
+
+
+@router.get("/order-sheet")
+def order_sheet(watchlist: int = Query(1, ge=0, le=1)) -> dict:
+    """下单参数清单：把系统里已确定的参数排成"照着填"的形式。
+
+    只为减少人肉转录的错误 —— **不做新计算**。
+    本系统不接券商交易接口（那需要交易密码，也没有公开接口），
+    下单动作始终由用户在自己的 App 里完成。
+    """
+    return sheet_svc.build(include_watchlist=bool(watchlist))

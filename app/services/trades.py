@@ -194,10 +194,18 @@ def open_trade(symbol: str, entry_price: float, shares: float,
     from ..sources import market
     sym = market.normalize(symbol)
     if not name:
+        # 优先用行情接口给的名字。display_name 走的是本地 instruments 表，
+        # 标的没入库时会**回退成代码本身**，界面上就会出现"002241.SZ 002241.SZ"。
         try:
-            name = market.display_name(sym)
+            q = market.get_quote(sym)
+            name = (q or {}).get("name") or ""
         except Exception:  # noqa: BLE001
-            name = sym
+            name = ""
+        if not name:
+            try:
+                name = market.display_name(sym)
+            except Exception:  # noqa: BLE001
+                name = sym
     e = _f(entry_price)
     if not e or e <= 0:
         return {"ok": False, "reason": "入场价必须是正数"}
