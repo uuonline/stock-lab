@@ -2240,6 +2240,54 @@ function renderCalc(r) {
       ${r.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}`;
 }
 
+async function doPlan() {
+  const el = $('#planResult');
+  if (!el) return;
+  const sym = ($('#planSymbol').value || '').trim().toUpperCase();
+  if (!sym) { toast('请输入标的', 'err'); return; }
+  el.innerHTML = '<div class="muted">计算中…（首次取数较慢）</div>';
+  try {
+    const d = await api('/trades/plan?symbol=' + encodeURIComponent(sym));
+    const rows = (d.candidates || []).map(c => {
+      if (!c.valid) return `<tr><td>${esc(c.kind)}</td><td class="num">${c.stop}</td>
+        <td colspan="5" class="muted">${esc(c.reason || '不可用')}</td></tr>`;
+      return `<tr${d.recommended && d.recommended.kind === c.kind && d.recommended.stop === c.stop
+          ? ' style="background:rgba(88,166,255,.10)"' : ''}>
+        <td>${esc(c.kind)}<div class="muted" style="font-size:10px">${esc(c.basis)}</div></td>
+        <td class="num">${c.stop}</td>
+        <td class="num">${c.stop_distance_pct}%</td>
+        <td class="num">${c.risk_shares}</td>
+        <td class="num"><b>${c.final_shares}</b></td>
+        <td class="num">${c.cost}</td>
+        <td class="num ${c.rr >= 1.5 ? 'up' : 'down'}">${c.rr === undefined ? '—' : c.rr}</td>
+      </tr>`;
+    }).join('');
+    const b = d.recommended || {};
+    el.innerHTML = `
+      <div class="kv-list">
+        <div class="kv"><span class="k">现价</span><span class="v">${d.price}
+          <span class="${(d.pct_change || 0) >= 0 ? 'up' : 'down'}">${fmtPct(d.pct_change)}</span></span></div>
+        <div class="kv"><span class="k">目标位</span><span class="v">${d.target}
+          <span class="muted">（${esc(d.target_basis || '')}）</span></span></div>
+        <div class="kv"><span class="k">风险预算</span><span class="v">${d.risk_amount} 元
+          （总资金 ${d.capital} × ${d.risk_pct}%）${d.available_cash ? `　可用资金 ${d.available_cash}` : '　<span class="muted">未设可用资金</span>'}</span></div>
+      </div>
+      <div class="table-wrap mt"><table>
+        <thead><tr><th>止损依据</th><th>止损价</th><th>距离</th><th>按风险算</th>
+          <th>可下单</th><th>占用资金</th><th>盈亏比</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      ${b.stop ? `<div class="warn-box mt">
+        <b>推荐：${esc(b.kind)}，止损 ${b.stop}</b>（${esc(b.basis)}）
+        → 可买 <b>${b.final_shares} 股</b>，占用 ${b.cost} 元，实际风险 ${b.actual_risk_pct}%
+        ${b.rr !== undefined && b.rr < 1.5
+          ? `<div style="margin-top:6px" class="down">注意：盈亏比只有 ${b.rr}，低于 1.5 —— 这种赔率下需要很高的胜率才划算。</div>` : ''}
+      </div>` : ''}
+      <div class="muted mt-sm" style="font-size:11px">${mdInline(d.note || '')}</div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="warn-box">${esc(e.message)}</div>`;
+  }
+}
+
 async function doCapacity() {
   const el = $('#capResult');
   if (!el) return;
@@ -2448,6 +2496,7 @@ function bind() {
 
   $('#tcCalcBtn').onclick = () => doCalc();
   $('#capBtn').onclick = () => doCapacity();
+  $('#planBtn').onclick = () => doPlan();
   $('#sheetCopyBtn').onclick = async () => {
     const t = (S.orderSheet && S.orderSheet.text) || '';
     if (!t) { toast('清单还没生成', 'err'); return; }

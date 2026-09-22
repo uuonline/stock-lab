@@ -303,6 +303,22 @@
     </div>
 
     <div class="card">
+      <div class="card-head">
+        <h3>一键仓位方案（现价 → 止损 → 股数）</h3>
+        <button class="btn primary" id="planBtn">生成方案</button>
+      </div>
+      <p class="muted mt-sm">
+        输入标的，系统用<b>实时现价</b>和技术位（ATR / 支撑位 / 箱体下沿）
+        算出<b>多个止损候选</b>，再按风险预算和可用资金给出各自能买多少股。
+        不用自己拍一个止损价 —— 但<b>选哪个</b>取决于你能承受多大回撤。
+      </p>
+      <div class="form-grid mt">
+        <label>标的 <input id="planSymbol" placeholder="002241.SZ"></label>
+      </div>
+      <div id="planResult" class="mt"></div>
+    </div>
+
+    <div class="card">
       <h3>能买多少（按现价）</h3>
       <p class="muted mt-sm">
         快速检查：以<b>当前价格</b>和你的可用资金，账户能吃下多少股。

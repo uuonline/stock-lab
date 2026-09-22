@@ -76,6 +76,20 @@ RISK_WARN_PCT = 3.0
 POSITION_WARN_PCT = 30.0
 
 
+# 编程错误不能和"数据取不到"混为一谈。
+# 实测踩过一次：from .anomaly import support_resistance 写错了模块名，
+# 抛出的 ImportError 被 except 静默吞掉，目标位悄悄退化成兜底值 ——
+# 界面看起来正常，结论却已经不对了。这类错误必须吵出来。
+_PROGRAMMING_ERRORS = (ImportError, AttributeError, TypeError, NameError)
+
+
+def _swallow(exc: Exception, where: str) -> None:
+    if isinstance(exc, _PROGRAMMING_ERRORS):
+        log.error("编程错误（不是数据问题）%s: %s", where, exc, exc_info=True)
+    else:
+        log.debug("%s: %s", where, exc)
+
+
 def _f(v: Any) -> float | None:
     try:
         if v is None:
@@ -561,4 +575,159 @@ def capacity(symbol: str, cash: float | None = None,
         "leftover": round(cash_v - (shares or 0) * px, 2),
         "note": ("A股买入需 100 股整数倍，所以有余额剩下是正常的"
                  if shares else "资金不足一手（100 股）"),
+    }
+
+
+def plan(symbol: str, capital: float | None = None, risk_pct: float | None = None,
+         stop_override: float | None = None,
+         target_override: float | None = None) -> dict[str, Any]:
+    """一键仓位方案：现价 → 止损位 → 股数 → 仓位。
+
+    之前的流程要求用户自己填入场价和止损价，但"止损该设在哪"恰好是
+    最需要专业判断、新手最容易拍脑袋的一步。而这个系统里有现成的技术位：
+    ATR、支撑位、箱体下沿 —— 都可以直接算出来。
+
+    所以这里给出**多个止损候选**并说明各自的依据，再按风险预算算股数，
+    最后和账户资金取小，直接给出可下单的数量。
+    """
+    from ..sources import market
+    from . import indicators as ta
+    from . import box as box_svc
+
+    sym = market.normalize(symbol)
+    st = get_settings() or {}
+    cap = _f(capital) or _f(st.get("capital")) or 100000.0
+    rp = _f(risk_pct) or 2.0
+
+    try:
+        q = market.get_quote(sym) or {}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": f"行情获取失败: {exc}"}
+    price = _f(q.get("price"))
+    if not price:
+        return {"ok": False, "reason": "拿不到现价"}
+
+    bars: list[dict] = []
+    try:
+        from .flow import long_history
+        bars = long_history(sym, 700)[-300:]
+    except Exception as exc:  # noqa: BLE001
+        _swallow(exc, f"plan: K线 {sym}")
+
+    # ---- 止损候选：每个都说明依据，不是随便给一个数 ----
+    cands: list[dict] = []
+    snap = ta.latest_snapshot(bars) if bars else {}
+    atr = _f(((snap.get("values") or {}).get("atr14")))
+    if atr and atr > 0:
+        for mult in (2.0,):
+            stp = price - mult * atr
+            if stp > 0:
+                cands.append({
+                    "kind": "ATR 止损", "stop": round(stp, 2),
+                    "basis": f"现价 − {mult:g}×ATR14（{atr:.2f}）",
+                    "note": "按波动幅度设，适合没有明显支撑位时",
+                })
+    try:
+        from .flow import support_resistance
+        sr = support_resistance(bars, price, lookback=120) or {}
+        for sup in (sr.get("supports") or [])[:2]:
+            if sup["price"] < price:
+                cands.append({
+                    "kind": "支撑位下方", "stop": round(sup["price"] * 0.995, 2),
+                    "basis": f"最近支撑位 {sup['price']} 下方 0.5%",
+                    "note": f"该价位历史被触碰 {sup['touches']} 次，跌破才算失效",
+                })
+    except Exception as exc:  # noqa: BLE001
+        _swallow(exc, f"plan: 支撑位 {sym}")
+    try:
+        bx = box_svc.adaptive(bars, price) if bars else {}
+        b = (bx.get("analysis") or {})
+        if b.get("bottom") and b["bottom"] < price and bx.get("trustworthy"):
+            cands.append({
+                "kind": "箱体下沿", "stop": round(b["bottom"] * 0.99, 2),
+                "basis": f"箱体下沿 {b['bottom']} 下方 1%",
+                "note": f"{bx.get('recommended_window')} 日箱体，跌破意味着区间逻辑失效",
+            })
+    except Exception as exc:  # noqa: BLE001
+        _swallow(exc, f"plan: 箱体 {sym}")
+
+    # 兜底：固定百分比（只在上面都算不出来时用）
+    if not cands:
+        cands.append({
+            "kind": "固定百分比", "stop": round(price * 0.92, 2),
+            "basis": "现价下方 8%", "note": "没有技术位可用时的兜底",
+        })
+
+    # ---- 目标位 ----
+    target = _f(target_override)
+    target_basis = "手动指定"
+    if not target:
+        try:
+            res = (support_resistance(bars, price, lookback=120) or {}).get("resistances") or []
+            if res and res[0]["price"] > price:
+                target = res[0]["price"]
+                target_basis = f"最近压力位 {target}（被触碰 {res[0]['touches']} 次）"
+        except Exception as exc:  # noqa: BLE001
+            _swallow(exc, f"plan: 目标压力位 {sym}")
+    if not target:
+        try:
+            b = (box_svc.adaptive(bars, price) or {}).get("analysis") or {}
+            if b.get("top") and b["top"] > price:
+                target = b["top"]
+                target_basis = f"箱体上沿 {target}"
+        except Exception as exc:  # noqa: BLE001
+            _swallow(exc, f"plan: 目标箱体 {sym}")
+    if not target and atr:
+        target = round(price + 3 * atr, 2)
+        target_basis = "现价 + 3×ATR14（兜底）"
+
+    # ---- 每个候选算一遍仓位 ----
+    cash = st.get("available_cash")
+    for c in cands:
+        s_ = c["stop"]
+        if s_ >= price:
+            c["valid"] = False
+            c["reason"] = "止损高于现价，不可用"
+            continue
+        calc = calc_position(cap, rp, price, s_, target, available_cash=cash,
+                             current_price=price)
+        c.update({
+            "valid": calc["ok"],
+            "stop_distance_pct": calc.get("stop_distance_pct"),
+            "risk_shares": calc.get("shares"),
+            "final_shares": calc.get("final_shares"),
+            "binding": calc.get("binding"),
+            "cost": calc.get("cost"),
+            "actual_risk_pct": calc.get("actual_risk_pct"),
+            "rr": calc.get("rr"),
+            "warnings": calc.get("warnings") or [],
+        })
+
+    valid = [c for c in cands if c.get("valid")]
+    # 推荐哪一个：距离适中（2%~12%）优先，太近容易被日常波动打掉，
+    # 太远则仓位被压得过小、意义不大
+    def score(c: dict) -> tuple:
+        d = c.get("stop_distance_pct") or 999
+        in_band = 2.0 <= d <= 12.0
+        return (not in_band, abs(d - 6.0))
+    best = min(valid, key=score) if valid else None
+
+    return {
+        "ok": True,
+        "symbol": sym,
+        "name": q.get("name") or market.display_name(sym),
+        "price": price,
+        "pct_change": _f(q.get("pct_change")),
+        "capital": cap,
+        "risk_pct": rp,
+        "risk_amount": round(cap * rp / 100, 2),
+        "available_cash": cash,
+        "atr14": atr,
+        "target": target,
+        "target_basis": target_basis,
+        "candidates": cands,
+        "recommended": best,
+        "note": ("止损位由技术位算出，不是拍脑袋；但**哪个止损适合你，"
+                 "取决于你能承受多大回撤** —— 距离越远仓位越小、越不容易被日常波动打掉；"
+                 "距离越近仓位越大、但更容易被洗出去。这里只给依据和后果。"),
     }

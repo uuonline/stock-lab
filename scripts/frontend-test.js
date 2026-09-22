@@ -664,6 +664,21 @@ function bad(name, detail) {
       cr2.includes('按风险预算') ? ok('保留风险预算口径对照') : bad('缺少风险预算对照');
       $('#tcCash').value = '';
 
+      // 一键仓位方案：现价 → 止损位 → 股数
+      $('#planSymbol').value = '002241.SZ';
+      $('#planBtn').click();
+      await waitFor(() => ($('#planResult').textContent || '').includes('止损依据'), 90000)
+        ? ok('一键仓位方案已生成') : bad('仓位方案未生成');
+      const pl = $('#planResult').textContent;
+      pl.includes('现价') ? ok('方案含实时现价') : bad('方案缺现价');
+      pl.includes('风险预算') ? ok('方案含风险预算') : bad('方案缺风险预算');
+      pl.includes('ATR') ? ok('止损候选含 ATR 依据') : bad('止损候选依据不全');
+      pl.includes('目标位') ? ok('方案含目标位') : bad('方案缺目标位');
+      /可下单/.test(pl) ? ok('方案给出可下单股数') : bad('方案缺可下单股数');
+      // 止损位必须说明依据，不能只给一个数字
+      /现价 − 2×ATR|支撑位|箱体下沿/.test(pl)
+        ? ok('止损给出技术依据') : bad('止损缺少依据说明');
+
       // 按现价的容量速查
       $('#capSymbol').value = '002241.SZ';
       $('#capBtn').click();

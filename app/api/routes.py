@@ -769,6 +769,26 @@ def trades_settings_set(body: SettingsIn) -> dict:
     return r
 
 
+@router.get("/trades/plan")
+def trades_plan(symbol: str, capital: float | None = Query(None, gt=0),
+                risk_pct: float | None = Query(None, gt=0, le=100),
+                stop: float | None = Query(None, gt=0),
+                target: float | None = Query(None, gt=0)) -> dict:
+    """一键仓位方案：现价 → 止损位 → 股数 → 仓位。
+
+    止损位由技术位（ATR、支撑位、箱体下沿）算出并说明依据，
+    不要求用户自己拍一个数。多个候选各自给出股数与盈亏比，
+    由用户按自己能承受的回撤来选。
+    """
+    try:
+        r = trade_svc.plan(symbol, capital, risk_pct, stop, target)
+    except SymbolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("reason") or "无法生成方案")
+    return r
+
+
 @router.get("/trades/capacity")
 def trades_capacity(symbol: str, cash: float | None = Query(None, ge=0),
                     price: float | None = Query(None, gt=0)) -> dict:
