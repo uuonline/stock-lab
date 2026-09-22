@@ -1,6 +1,6 @@
 """消息推送渠道。
 
-支持：企业微信机器人、Telegram、Server酱、Bark、通用 Webhook。
+支持：群晖 Chat、企业微信机器人、Telegram、Server酱、Bark、通用 Webhook。
 全部通过 .env 配置，留空即自动跳过该渠道。
 """
 from __future__ import annotations
@@ -17,9 +17,13 @@ log = logging.getLogger("stocklab.notify")
 TIMEOUT = 15.0
 
 
-def _post(url: str, **kwargs: Any) -> bool:
+def _post(url: str, verify: bool = True, **kwargs: Any) -> bool:
+    """verify=False 用于群晖这类自签名证书的场景。
+
+    ⚠️ 关闭校验只影响本机局域网内的 NAS 地址；不要拿它去访问公网服务。
+    """
     try:
-        with httpx.Client(timeout=TIMEOUT, trust_env=False) as c:
+        with httpx.Client(timeout=TIMEOUT, trust_env=False, verify=verify) as c:
             r = c.post(url, **kwargs)
             if r.status_code >= 400:
                 log.warning("推送失败 %s -> HTTP %s %s", url[:60], r.status_code, r.text[:200])
@@ -81,7 +85,33 @@ def send_generic(content: str, title: str = "") -> bool:
     )
 
 
+def send_synology_chat(content: str, title: str = "") -> bool:
+    """群晖 Chat（Synology Chat）传入 Webhook。
+
+    协议要点（和常见 webhook 不一样，容易踩坑）：
+      · 地址形如 https://nas:port/webapi/entry.cgi?api=SYNO.Chat.External
+        &method=incoming&version=2&token=xxx
+      · 官方要求 **form-urlencoded**，JSON 放在 `payload` 字段里，
+        而不是直接 POST 一个 JSON body
+      · 群晖默认自签名证书，所以默认不校验 SSL（可用
+        SL_NOTIFY_SYNOLOGY_VERIFY=1 打开严格校验）
+    """
+    url = settings.notify_synology_chat
+    if not url:
+        return False
+    import json as _json
+    text = f"{title}\n{content}" if title else content
+    ok = _post(url, verify=settings.notify_synology_verify,
+               data={"payload": _json.dumps({"text": text}, ensure_ascii=False)})
+    if not ok:
+        # 有些版本也接受直接 POST JSON，失败时再试一次
+        ok = _post(url, verify=settings.notify_synology_verify,
+                   json={"text": text})
+    return ok
+
+
 CHANNELS = {
+    "synology": (send_synology_chat, "群晖 Chat"),
     "wecom": (send_wecom, "企业微信机器人"),
     "telegram": (send_telegram, "Telegram"),
     "serverchan": (send_serverchan, "Server酱"),
@@ -101,6 +131,7 @@ def _is_configured(key: str) -> bool:
         "serverchan": bool(settings.notify_serverchan_key),
         "bark": bool(settings.notify_bark_url),
         "webhook": bool(settings.notify_generic_webhook),
+        "synology": bool(settings.notify_synology_chat),
     }.get(key, False)
 
 

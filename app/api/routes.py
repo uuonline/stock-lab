@@ -594,10 +594,34 @@ def check_alerts_now() -> dict:
 
 @router.post("/alerts/test-notify")
 def test_notify() -> dict:
+    """发一条测试消息到所有已配置的渠道。
+
+    未配置时**也要把所有可选渠道列出来** —— 只说"未配置"等于把
+    "该配什么" 留给用户去猜。
+    """
+    from ..services import notify as notify_svc
+
     results = alert_svc.test_notify()
+    supported = [{"key": k, "label": label, "configured": k in notify_svc.configured_channels()}
+                 for k, (_, label) in notify_svc.CHANNELS.items()]
+    tips = {
+        "synology": "群晖 Chat → 频道 → 整合 → 传入 Webhook，复制地址填 SL_NOTIFY_SYNOLOGY_CHAT",
+        "wecom": "企业微信群 → 添加群机器人 → 复制 Webhook 填 SL_NOTIFY_WECOM",
+        "telegram": "找 @BotFather 建 Bot，填 SL_NOTIFY_TG_TOKEN 与 SL_NOTIFY_TG_CHAT",
+        "serverchan": "sct.ftqq.com 扫码拿 SendKey，填 SL_NOTIFY_SERVERCHAN",
+        "bark": "iPhone 装 Bark App，复制地址填 SL_NOTIFY_BARK",
+        "webhook": "任意能收 POST 的地址，填 SL_NOTIFY_WEBHOOK",
+    }
+    for item in supported:
+        item["tip"] = tips.get(item["key"], "")
+    body = {"results": results, "supported": supported}
     if not results:
-        return {"ok": False, "detail": "未配置任何推送渠道，请在 .env 中填写", "results": {}}
-    return {"ok": any(results.values()), "results": results}
+        body["ok"] = False
+        body["detail"] = ("未配置任何推送渠道 —— 提醒会正常记录到历史，但不会发到你手机。"
+                          "从下面选一个配置即可：")
+        return body
+    body["ok"] = any(results.values())
+    return body
 
 
 @router.get("/alerts/events")

@@ -133,6 +133,12 @@ class Settings:
     notify_serverchan_key: str = field(default_factory=lambda: _env("SL_NOTIFY_SERVERCHAN", ""))
     notify_bark_url: str = field(default_factory=lambda: _env("SL_NOTIFY_BARK", ""))
     notify_generic_webhook: str = field(default_factory=lambda: _env("SL_NOTIFY_WEBHOOK", ""))
+    # 群晖 Chat 的「传入 Webhook」地址
+    notify_synology_chat: str = field(
+        default_factory=lambda: _env("SL_NOTIFY_SYNOLOGY_CHAT", ""))
+    # 群晖默认用自签名证书，所以默认不校验；要严格校验就设为 1
+    notify_synology_verify: bool = field(
+        default_factory=lambda: _env("SL_NOTIFY_SYNOLOGY_VERIFY", "0") == "1")
 
     # ---- 调度 ----
     scheduler_enabled: bool = field(default_factory=lambda: _env_bool("SL_SCHEDULER_ENABLED", True))

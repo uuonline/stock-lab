@@ -194,6 +194,11 @@ check_has "返回归因分层"    '"attribution"' "$BASE/api/anomaly/002241.SZ"
 check_has "返回状态与条件"  '"condition"' "$BASE/api/anomaly/002241.SZ"
 
 echo
+echo "── 推送渠道 ──"
+check "推送渠道列表"          200 "$BASE/api/alerts/test-notify" -X POST
+check_has "含群晖Chat渠道"    'synology' "$BASE/api/alerts/test-notify" -X POST
+
+echo
 echo "── 历史类比 ──"
 check "历史类比正常"        200 "$BASE/api/analogs/002241.SZ"
 check "类比+非法标的"       400 "$BASE/api/analogs/BOGUS"
