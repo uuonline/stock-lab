@@ -268,6 +268,16 @@ def get_kline(
                 # 只支持日线且不支持港股，不满足条件就跳过
                 if period not in ("day", "daily") or not alphavantage.is_supported(sym):
                     continue
+                # 额度保护：免费额度只有 25 次/天，绝不能让它被日常降级吃掉。
+                # 前面几个源里新浪对复权请求是"不兼容跳过"（不是失败），
+                # 这会让 Alpha Vantage 实际变成第三顺位 —— 每次降级都扣一次额度。
+                # 所以额度用到一半就不再拿它取 K线，留着给真正需要兜底的时候。
+                if alphavantage.usage_today() >= settings.av_daily_limit * 0.5:
+                    log.debug(
+                        "Alpha Vantage 今日已用 %d/%d，跳过 K线兜底以免烧穿额度",
+                        alphavantage.usage_today(), settings.av_daily_limit,
+                    )
+                    continue
                 got = alphavantage.kline(sym, period, limit)
             else:
                 log.debug("K线链路里不认识的源，跳过: %s", src)
@@ -766,8 +776,17 @@ def resolve_symbol(raw: str) -> str | None:
     return hits[0]["symbol"] if hits else None
 
 
+# 财务历史至少要这么多期才够还原五年 TTM EPS 序列
+FUNDAMENTALS_MIN_PERIODS = 20
+
+
 def get_fundamentals(symbol: str, force: bool = False) -> dict:
-    """财务数据，本地缓存 1 天。"""
+    """财务数据，本地缓存 1 天。
+
+    缓存会自愈：如果缓存里的报告期数不够（例如早期版本只存了 12 期），
+    即使没过期也重新抓一次 —— 否则加深历史深度后，缓存的旧数据会
+    让新功能一直拿不到足够的历史。
+    """
     sym = normalize(symbol)
     if not force:
         row = db.query_one(
@@ -780,7 +799,12 @@ def get_fundamentals(symbol: str, force: bool = False) -> dict:
             try:
                 if time.time() - time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S")) < 86400:
                     import json
-                    return json.loads(row["payload"])
+                    payload = json.loads(row["payload"])
+                    if len(payload.get("history") or []) >= FUNDAMENTALS_MIN_PERIODS:
+                        return payload
+                    log.info("财务缓存只有 %d 期，不足 %d 期，重新抓取 %s",
+                             len(payload.get("history") or []),
+                             FUNDAMENTALS_MIN_PERIODS, sym)
             except (ValueError, TypeError):
                 pass
     try:

@@ -28,6 +28,7 @@
   <button class="tab" data-view="watchlist">自选</button>
   <button class="tab" data-view="detail">个股</button>
   <button class="tab" data-view="screener">选股</button>
+  <button class="tab" data-view="flow">AI 全流程</button>
   <button class="tab" data-view="backtest">回测</button>
   <button class="tab" data-view="alerts">提醒</button>
   <button class="tab" data-view="settings">设置</button>
@@ -90,6 +91,7 @@
       <div class="add-row">
         <input id="detailInput" placeholder="输入代码或名称后回车，如 600519.SH" autocomplete="off">
         <button class="btn primary" id="detailGoBtn">查询</button>
+        <button class="btn" id="detailFlowBtn" title="对这一只做 6 步 13 项全流程分析">AI 全流程</button>
       </div>
       <div id="detailSuggest" class="suggest"></div>
     </div>
@@ -221,6 +223,33 @@
       <h3>触发历史</h3>
       <div class="table-wrap"><table id="eventTable"></table></div>
     </div>
+  </section>
+
+
+  <!-- ========== AI 全流程 ========== -->
+  <section class="view" id="view-flow">
+    <div class="card">
+      <div class="card-head">
+        <h3>AI 全流程分析 · 6 步 13 提示词</h3>
+        <button class="btn" id="flowPackBtn" title="复制提示词原文 + 真实数据">复制数据包</button>
+      </div>
+      <p class="muted mt-sm">
+        这套流程让 AI 做信息整理和逻辑推演，把判断留给人 —— 思路是对的。
+        但有个前提：<b>整理用的原料必须是真实数据</b>。
+        AI 在「竞争对手是谁」这类通用知识上可靠，在「单一客户占比多少」这类具体数字上会编。
+        所以本栏目只做两件事：把系统里真实存在的数据取出来算好，
+        以及明确指出<b>哪些信息本系统没有</b> —— 没有的项不会生成任何结论。
+      </p>
+      <div class="form-grid mt">
+        <label>标的 <input id="flowSymbol" placeholder="600519.SH 或 002241.SZ"></label>
+      </div>
+      <div class="row-actions mt">
+        <button class="btn primary" id="flowRunBtn">开始分析</button>
+        <span id="flowHint" class="muted" style="align-self:center"></span>
+      </div>
+    </div>
+    <div id="flowSummary"></div>
+    <div id="flowSteps"></div>
   </section>
 
   <!-- ========== 设置 ========== -->

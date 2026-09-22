@@ -167,6 +167,20 @@ check_more_bars() {
 check_more_bars
 
 echo
+echo "── AI 全流程 ──"
+check "全流程正常"          200 "$BASE/api/flow/002241.SZ"
+check "全流程+非法标的"     400 "$BASE/api/flow/BOGUS"
+check "数据包正常"          200 "$BASE/api/flow/002241.SZ/pack"
+check "ETF 无财报不崩"      200 "$BASE/api/flow/510300.SH"
+check "港股无财报不崩"      200 "$BASE/api/flow/00700.HK"
+check_has "返回六步结构"    '"steps"' "$BASE/api/flow/002241.SZ"
+check_has "标注无数据项"    '"no_data"' "$BASE/api/flow/002241.SZ"
+check_has "带免责声明"      '不构成投资建议' "$BASE/api/flow/002241.SZ"
+check_has "数据包含提示词原文" \
+  '请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。' \
+  "$BASE/api/flow/002241.SZ/pack"
+
+echo
 echo "══════════════════════════════════════════════════════"
 printf "  通过 %d   失败 %d   警告 %d\n" "$PASS" "$FAIL" "$WARN"
 echo "══════════════════════════════════════════════════════"

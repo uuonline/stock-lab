@@ -14,6 +14,7 @@ from ..services import ai as ai_svc
 from ..services import alerts as alert_svc
 from ..services import backtest as bt_svc
 from ..services import box as box_svc
+from ..services import flow as flow_svc
 from ..services import indicators as ta
 from ..services import notify as notify_svc
 from ..services import quote as quote_svc
@@ -635,3 +636,38 @@ def selftest(include_optional: int = Query(1, ge=0, le=1)) -> dict:
     from ..services import selftest as st
 
     return st.run_all(include_optional=bool(include_optional))
+
+
+@router.get("/flow/{symbol}")
+def get_flow(symbol: str) -> dict:
+    """AI 全流程分析：6 步 13 提示词。
+
+    能算的用真实数据算，算不出的明确标注「本系统无此数据」——
+    不会为了让每项都有答案而编造。
+    """
+    try:
+        sym = normalize(symbol)
+    except SymbolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        return flow_svc.build(sym)
+    except FetchError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.get("/flow/{symbol}/pack")
+def get_flow_pack(symbol: str) -> dict:
+    """把 13 个提示词原文 + 本系统的真实数据拼成可直接复制的文本。
+
+    给"想拿去外部 AI 再跑一遍"的用户用：提示词不变，
+    但把真实数据一起带上，外部 AI 就不需要（也不会）编造这些数字。
+    """
+    try:
+        sym = normalize(symbol)
+    except SymbolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        text = flow_svc.data_pack(sym)
+    except FetchError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"symbol": sym, "chars": len(text), "text": text}

@@ -59,6 +59,33 @@ function loading(on, text) {
   $('#loading').classList.toggle('hidden', !on);
 }
 
+/* 复制到剪贴板。
+
+   注意：本系统通常部署在局域网 http:// 下，而 navigator.clipboard
+   只在安全上下文（HTTPS 或 localhost）里可用 —— 直接用它会静默失败。
+   所以必须保留 execCommand 回退。 */
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* 落到回退方案 */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  if (!ok) throw new Error('浏览器拒绝了复制，请手动选中复制');
+  return true;
+}
+
 const esc = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -210,6 +237,13 @@ function applyRoute() {
     const target = symbol || S.detailSymbol;
     if (target) { loadDetail(target); return; }
   }
+  if (v === 'flow' && symbol) {
+    // 带标的的地址（#flow/002241.SZ）直接跑，刷新后能还原
+    if ($('#flowSymbol')) $('#flowSymbol').value = symbol;
+    if (S.detailSymbol) $('#flowSymbol').value = symbol;
+    runFlow(symbol);
+    return;
+  }
   render();
 }
 
@@ -218,6 +252,13 @@ function render() {
     case 'dashboard': return loadDashboard();
     case 'watchlist': return loadWatchlist();
     case 'screener':  return initScreener();
+    case 'flow':
+      // 不自动重跑：一次全流程要打多个数据源，切标签就重算太浪费。
+      // 已有结果就保留，没有就把输入框填上当前个股。
+      if ($('#flowSymbol') && !$('#flowSymbol').value && S.detailSymbol) {
+        $('#flowSymbol').value = S.detailSymbol;
+      }
+      return;
     case 'backtest':  return initBacktest();
     case 'alerts':    return loadAlerts();
     case 'settings':  return loadSettings();
@@ -1585,6 +1626,250 @@ function tickClock() {
 
 /* ---------------- 事件绑定 ---------------- */
 
+
+/* ============ AI 全流程（6 步 13 提示词）============ */
+const FLOW_BADGE = {
+  grounded: { cls: 'up',   text: '有数据', tip: '结论完全由系统真实数据算出' },
+  partial:  { cls: 'flat', text: '部分',   tip: '部分有数据，缺口已标注' },
+  no_data:  { cls: 'down', text: '无数据', tip: '本系统没有这类数据，不生成结论' },
+};
+
+/* 极简 markdown 渲染：只处理 **加粗**，且先转义再替换，避免 XSS。
+   后端文案里用了 ** 强调，直接显示会看到星号。 */
+function mdInline(t) {
+  return esc(t || '').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+}
+
+function fmtNum(v, digits) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(digits === undefined ? 2 : digits) : String(v);
+}
+
+function fmtPct(v, digits) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return (n >= 0 ? '+' : '') + n.toFixed(digits === undefined ? 2 : digits) + '%';
+}
+
+/* 把某一项的结构化数据渲染成表格（有数据项才需要） */
+function renderFlowData(id, d) {
+  if (!d) return '';
+  if (id === 'p3' && d.years) {
+    const rows = d.years.map(y => `<tr>
+      <td>${esc(y.year)}</td>
+      <td class="num">${esc(y.revenue_text)}</td>
+      <td class="num">${fmtPct(y.rev_yoy)}</td>
+      <td class="num">${esc(y.net_profit_text)}</td>
+      <td class="num">${fmtPct(y.np_yoy)}</td>
+      <td class="num">${fmtNum(y.roe)}%</td>
+      <td class="num">${fmtNum(y.net_margin)}%</td></tr>`).join('');
+    const lr = d.long_range || {};
+    return `<div class="table-wrap"><table>
+      <thead><tr><th>年度</th><th>营收</th><th>营收同比</th><th>净利润</th>
+        <th>净利同比</th><th>ROE</th><th>净利率</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      <div class="muted mt-sm" style="font-size:12px">
+        参考更长区间 ${esc(lr.from)}→${esc(lr.to)}（共 ${lr.years} 年）年均复合：
+        营收 ${fmtPct(lr.rev_cagr)}、净利润 ${fmtPct(lr.np_cagr)}</div>`;
+  }
+  if (id === 'p4' && d.history) {
+    const h = d.history;
+    return `<div class="kv-list">
+      <div class="kv"><span class="k">当前 PE(TTM)</span><span class="v">${fmtNum(d.current_pe)}</span></div>
+      <div class="kv"><span class="k">历史分位</span><span class="v"><b>${fmtNum(d.percentile,1)}%</b> · ${esc(d.band)}</span></div>
+      <div class="kv"><span class="k">PE 区间</span><span class="v">${fmtNum(h.min)} ~ ${fmtNum(h.max)}（中位 ${fmtNum(h.median)}）</span></div>
+      <div class="kv"><span class="k">样本</span><span class="v">${h.days} 个交易日 · ${esc(h.start_date)} ~ ${esc(h.end_date)}</span></div>
+      <div class="kv"><span class="k">价格分位</span><span class="v">${d.price_percentile === null ? '—' : fmtNum(d.price_percentile,1) + '%'}</span></div>
+    </div>`;
+  }
+  if (id === 'p5') {
+    const o = d.own || {}, m = d.market_rank || {};
+    return `<div class="kv-list">
+      <div class="kv"><span class="k">本股 PB</span><span class="v">${fmtNum(o.pb)}</span></div>
+      <div class="kv"><span class="k">本股 ROE</span><span class="v">${fmtNum(o.roe)}%</span></div>
+      <div class="kv"><span class="k">本股 PE(TTM)</span><span class="v">${fmtNum(o.pe)}</span></div>
+      ${m.total ? `<div class="kv"><span class="k">全市场 PB 分位</span><span class="v">${fmtNum(m.percentile,1)}%（${m.total} 只，中位 ${fmtNum(m.median)}）</span></div>` : ''}
+    </div>`;
+  }
+  if (id === 'p6') {
+    return `<div class="kv-list">
+      <div class="kv"><span class="k">区间</span><span class="v">${esc(d.range || '—')}</span></div>
+      <div class="kv"><span class="k">净利润复合增速</span><span class="v">${fmtPct(d.profit_cagr)}</span></div>
+      <div class="kv"><span class="k">营收复合增速</span><span class="v">${fmtPct(d.rev_cagr)}</span></div>
+      <div class="kv"><span class="k">PEG</span><span class="v"><b>${fmtNum(d.peg)}</b>（营收口径 ${fmtNum(d.rev_peg)}）</span></div>
+      <div class="kv"><span class="k">结论</span><span class="v">${esc(d.verdict)}</span></div>
+    </div>`;
+  }
+  if (id === 'p7' && d.checks) {
+    const rows = d.checks.map(c => `<tr>
+      <td>${esc(c.item)}</td><td>${esc(c.value)}</td>
+      <td class="${c.flag ? 'down' : ''}">${c.flag ? '⚠ 需关注' : '正常'}</td>
+      <td class="muted">${esc(c.read)}</td></tr>`).join('');
+    return `<div class="table-wrap"><table>
+      <thead><tr><th>侧面检查</th><th>数据</th><th>判定</th><th>说明</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+  if (id === 'p10') {
+    return `<div class="kv-list">
+      <div class="kv"><span class="k">现价</span><span class="v">${fmtNum(d.price)}</span></div>
+      <div class="kv"><span class="k">MA5</span><span class="v">${fmtNum(d.ma5)} · ${esc(d.rel && d.rel.ma5)}</span></div>
+      <div class="kv"><span class="k">MA20</span><span class="v">${fmtNum(d.ma20)} · ${esc(d.rel && d.rel.ma20)}</span></div>
+      <div class="kv"><span class="k">MA60</span><span class="v">${fmtNum(d.ma60)} · ${esc(d.rel && d.rel.ma60)}</span></div>
+      <div class="kv"><span class="k">通道判定</span><span class="v">${esc(d.channel)}</span></div>
+    </div>`;
+  }
+  if (id === 'p11') {
+    const lv = (arr, kind) => (arr || []).map(x =>
+      `<div class="kv"><span class="k">${kind}</span><span class="v">${fmtNum(x.price)}
+        ${x.touches ? `（被触碰 ${x.touches} 次，最近 ${esc(x.last_date)}）`
+                    : `（${esc(x.basis)}）`}</span></div>`).join('');
+    return `<div class="kv-list">${lv(d.supports, '支撑位')}${lv(d.resistances, '压力位')}</div>`;
+  }
+  if (id === 'p12' && d.cases) {
+    const rows = d.cases.map(c => `<tr>
+      <td><b>${esc(c.name)}</b></td>
+      <td class="num">${esc(String(c.target))}</td>
+      <td class="num">${esc(c.change)}</td>
+      <td class="num">${fmtNum(c.prob, 1)}%</td>
+      <td>${mdInline(c.desc)}</td></tr>`).join('');
+    return `<div class="table-wrap"><table>
+      <thead><tr><th>情景</th><th>目标价</th><th>涨跌</th><th>概率</th><th>说明</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      <div class="kv-list mt">
+        ${d.cases.map(c => `<div class="kv"><span class="k">${esc(c.name)}的应对</span>
+          <span class="v">${mdInline(c.plan)}</span></div>`).join('')}
+      </div>
+      <div class="muted mt-sm" style="font-size:12px">
+        近 60 日日均波动 ${fmtNum(d.daily_vol_pct)}%，推到 ${d.horizon_days} 个交易日
+        一个标准差为 ${fmtNum(d.sigma_3m_pct, 1)}%。${esc(d.caveat)}</div>`;
+  }
+  if (id === 'p13') {
+    return `<div class="kv-list">
+      <div class="kv"><span class="k">综合评分</span><span class="v">${fmtNum(d.score)} / 10 · ${esc(d.verdict)}</span></div>
+      <div class="kv"><span class="k">倾向</span><span class="v">${esc(d.action)}</span></div>
+      <div class="kv"><span class="k">参考仓位</span><span class="v">${esc(d.position)}（${esc(d.position_reason)}）</span></div>
+      <div class="kv"><span class="k">字数</span><span class="v">${d.chars} 字</span></div>
+    </div>`;
+  }
+  return '';
+}
+
+function renderFlow(d) {
+  const sm = $('#flowSummary');
+  const el = $('#flowSteps');
+  if (!sm || !el) return;
+  if (!d || !d.steps) { el.innerHTML = '<div class="card muted">分析失败</div>'; return; }
+
+  const s = d.summary;
+  sm.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <h3>${esc(d.name)} <span class="muted">${esc(d.symbol)}</span></h3>
+        <span class="${d.pct_change >= 0 ? 'up' : 'down'}">${fmtNum(d.price)}
+          ${fmtPct(d.pct_change)}</span>
+      </div>
+      <div class="kv-list">
+        <div class="kv"><span class="k">13 项完成情况</span><span class="v">
+          <span class="up">有数据 ${s.grounded}</span> ·
+          <span class="flat">部分 ${s.partial}</span> ·
+          <span class="down">无数据 ${s.no_data}</span></span></div>
+        <div class="kv"><span class="k">生成时间</span><span class="v">${esc(d.generated_at)}</span></div>
+      </div>
+      <div class="warn-box" style="margin-top:10px">
+        <span style="font-size:12px;opacity:.9">${mdInline(d.disclaimer)}</span>
+      </div>
+    </div>`;
+
+  el.innerHTML = d.steps.map(st => `
+    <div class="card">
+      <div class="card-head">
+        <h3>${esc(st.title)}</h3>
+        <span class="muted" style="font-size:12px">
+          ${st.count} 项 · 有数据 ${st.grounded} / 部分 ${st.partial} / 无 ${st.no_data}</span>
+      </div>
+      ${st.answers.map(a => {
+        const b = FLOW_BADGE[a.status] || FLOW_BADGE.partial;
+        const gap = a.gap || {};
+        return `
+        <div style="border-top:1px solid var(--border);padding:12px 0">
+          <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">
+            <span class="muted" style="font-size:12px;flex:0 0 auto">#${a.seq}</span>
+            <b style="flex:1 1 auto">${esc(a.title)}</b>
+            <span class="${b.cls}" style="flex:0 0 auto;font-size:12px"
+                  title="${esc(b.tip)}">${b.text}</span>
+          </div>
+          <div class="muted" style="font-size:12px;padding-left:20px;border-left:2px solid var(--border);margin-bottom:8px">
+            ${esc(a.prompt)}
+          </div>
+          <div style="padding-left:20px">
+            ${a.text ? `<div style="margin-bottom:8px">${mdInline(a.text)}</div>` : ''}
+            ${renderFlowData(a.id, a.data)}
+            ${a.status === 'no_data' ? `
+              <div class="warn-box">
+                <b>本系统无此数据</b><br>
+                <span style="font-size:12px">${esc(gap.reason || '')}</span>
+                ${(gap.where || []).length ? `<div style="font-size:12px;margin-top:6px">
+                  可从这里查：<ul style="margin:4px 0 0 18px">
+                  ${gap.where.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
+              </div>` : ''}
+            ${(gap.where || []).length && a.status !== 'no_data' ? `
+              <div class="muted mt-sm" style="font-size:12px">
+                缺口：${esc(gap.reason || '')}
+                <ul style="margin:4px 0 0 18px">${gap.where.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
+              </div>` : ''}
+            ${a.source ? `<div class="muted mt-sm" style="font-size:11px">
+              数据来源：${esc(a.source)}</div>` : ''}
+            ${a.method_caveat ? `<div class="muted" style="font-size:11px">
+              口径：${esc(a.method_caveat)}</div>` : ''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`).join('') + `
+    <div class="card">
+      <div class="warn-box">
+        <b>关于这份分析的边界</b>
+        <div class="mt-sm" style="font-size:12px;opacity:.9">${mdInline(d.disclaimer)}</div>
+        <div class="mt-sm" style="font-size:12px;opacity:.9">
+          「有数据」项由系统按固定算法从真实数据算出，口径已逐项标注；
+          「无数据」项本系统确实取不到，请按给出的途径自行补充。
+          所有内容<b>不构成投资建议</b>，据此操作风险自负。
+        </div>
+      </div>
+    </div>`;
+}
+
+async function runFlow(sym) {
+  const el = $('#flowSteps');
+  const hint = $('#flowHint');
+  if (!sym) { toast('请先输入标的', 'err'); return; }
+  if (hint) hint.textContent = '分析中，首次取数较慢…';
+  if (el) el.innerHTML = '<div class="card muted">加载中…</div>';
+  try {
+    const d = await api('/flow/' + encodeURIComponent(sym));
+    S.flowData = d;
+    renderFlow(d);
+    setHash('flow', sym);
+    if (hint) hint.textContent = '';
+  } catch (e) {
+    if (el) el.innerHTML = `<div class="card muted">分析失败：${esc(e.message)}</div>`;
+    if (hint) hint.textContent = '';
+  }
+}
+
+async function copyFlowPack() {
+  const sym = (S.flowData && S.flowData.symbol) || $('#flowSymbol').value.trim();
+  if (!sym) { toast('请先输入标的', 'err'); return; }
+  try {
+    const d = await api('/flow/' + encodeURIComponent(sym) + '/pack');
+    await copyText(d.text);
+    toast(`已复制数据包（${d.chars} 字），可直接粘给任意 AI`, 'ok');
+  } catch (e) {
+    toast('复制失败：' + e.message, 'err');
+  }
+}
+
 function bind() {
   $('#tabs').onclick = (e) => {
     const t = e.target.closest('.tab');
@@ -1596,6 +1881,28 @@ function bind() {
     const b = e.target.closest('.seg-btn');
     if (b) loadMovers(b.dataset.kind);
   };
+
+  const flowBtn = $('#detailFlowBtn');
+  if (flowBtn) {
+    flowBtn.onclick = () => {
+      if (!S.detailSymbol) { toast('请先查询一只股票', 'err'); return; }
+      if ($('#flowSymbol')) $('#flowSymbol').value = S.detailSymbol;
+      showView('flow');
+      runFlow(S.detailSymbol);
+    };
+  }
+
+  $('#flowRunBtn').onclick = () => {
+    const v = ($('#flowSymbol').value || '').trim().toUpperCase();
+    runFlow(v);
+  };
+  $('#flowSymbol').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const v = ($('#flowSymbol').value || '').trim().toUpperCase();
+      runFlow(v);
+    }
+  });
+  $('#flowPackBtn').onclick = () => copyFlowPack();
 
   // 箱体模式切换：面板每次渲染都会重建，所以用事件委托绑在外层容器上
   $('#boxPanel').addEventListener('click', (e) => {

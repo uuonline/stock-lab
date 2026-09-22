@@ -121,7 +121,12 @@ function bad(name, detail) {
 
   // ---- 4. 检查静态结构 ----
   const tabs = $$('.tab').map(t => t.dataset.view);
-  tabs.length === 7 ? ok('标签页渲染', tabs.join(',')) : bad('标签页数量', tabs.length);
+  // 不写死数量：加栏目是正常迭代，写死会变成每次都要改测试。
+  // 真正要保证的是「必有的几个栏目都在」+「每个标签都有对应视图」。
+  const mustHave = ['dashboard', 'watchlist', 'detail', 'screener', 'flow', 'backtest', 'alerts', 'settings'];
+  const missing = mustHave.filter(v => !tabs.includes(v));
+  missing.length === 0 ? ok('标签页渲染齐全', tabs.join(','))
+                       : bad('缺少栏目', missing.join(','));
 
   const viewsPresent = tabs.every(v => $(`#view-${v}`));
   viewsPresent ? ok('每个标签都有对应视图容器') : bad('缺少视图容器');
@@ -463,6 +468,54 @@ function bad(name, detail) {
       ? ok('刷新后仍在个股页（路由还原）', $2('#detailInput').value)
       : bad('刷新后未还原到个股页');
     w2.close();
+  }
+
+  // ---- AI 全流程栏目（6 步 13 提示词）----
+  {
+    const flowTab = window.document.querySelector('.tab[data-view="flow"]');
+    flowTab ? ok('存在「AI 全流程」标签') : bad('缺少 AI 全流程标签');
+    if (flowTab) {
+      flowTab.click();
+      await sleep(400);
+      $('#view-flow').classList.contains('active')
+        ? ok('切换到全流程栏目') : bad('未切换到全流程栏目');
+
+      $('#flowSymbol').value = '002241.SZ';
+      $('#flowRunBtn').click();
+      await waitFor(() => $('#flowSteps').textContent.includes('第一步'), 120000)
+        ? ok('全流程分析已渲染') : bad('全流程分析未渲染');
+
+      const ft = $('#flowSteps').textContent;
+      const nSteps = (ft.match(/第[一二三四五六]步/g) || []).length;
+      nSteps >= 6 ? ok('六个步骤齐全', nSteps + ' 个') : bad('步骤不全', String(nSteps));
+      const nCards = $('#flowSteps').querySelectorAll('div[style*="border-top"]').length;
+      nCards === 13 ? ok('13 个提示词卡片齐全') : bad('提示词卡片数不对', String(nCards));
+
+      // 核心原则：没有数据的项必须明确标注，不能生成结论
+      const nNo = (ft.match(/本系统无此数据/g) || []).length;
+      nNo >= 4 ? ok('无数据项明确标注（未编造）', nNo + ' 处')
+               : bad('无数据项标注不足', String(nNo));
+      ft.includes('可从这里查') ? ok('无数据项给出查询途径') : bad('无数据项缺少查询途径');
+
+      // 有数据的项必须能追溯到来源
+      const nSrc = (ft.match(/数据来源/g) || []).length;
+      nSrc >= 6 ? ok('有数据项标注来源', nSrc + ' 处') : bad('数据来源标注不足', String(nSrc));
+
+      // 关键计算项
+      ft.includes('历史分位') ? ok('PE 历史分位已计算') : bad('缺少 PE 历史分位');
+      (ft.includes('支撑位') && ft.includes('压力位'))
+        ? ok('支撑压力位已给出') : bad('缺少支撑压力位');
+      (ft.includes('乐观') && ft.includes('震荡') && ft.includes('悲观'))
+        ? ok('三种情景齐全') : bad('情景不齐');
+      ft.includes('参考仓位') ? ok('给出仓位建议') : bad('缺少仓位建议');
+
+      // 免责声明必须出现在栏目里
+      ft.includes('不构成投资建议') ? ok('全流程栏目带免责声明') : bad('缺少免责声明');
+
+      // 提示词原文必须一字不改
+      ft.includes('请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。')
+        ? ok('提示词原文完整保留') : bad('提示词原文被改动');
+    }
   }
 
   console.log('\n══════════════════════════════════════════════════════');

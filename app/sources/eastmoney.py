@@ -303,7 +303,13 @@ def market_list(
     return rows, int(node.get("total") or 0)
 
 
-def fundamentals(symbol: str, page_size: int = 12) -> dict:
+def fundamentals(symbol: str, page_size: int = 24) -> dict:
+    """财务数据。
+
+    page_size 默认 24 期（约 6 年）：算五年 PE 分位需要足够的 TTM EPS 序列，
+    12 期只能还原出约两年半。实测 24 期可正常返回（002241.SZ 回到 2020-09），
+    30 期也能返回。
+    """
     """主要财务指标（东财 F10）。"""
     code, _, mkt = symbol.rpartition(".")
     secucode = f"{code}.{mkt}"
