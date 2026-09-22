@@ -189,7 +189,8 @@ def open_trade(symbol: str, entry_price: float, shares: float,
                stop_price: float | None = None, target_price: float | None = None,
                reason: str = "", note: str = "", entry_date: str | None = None,
                name: str = "", plan: dict | None = None,
-               take_snapshot: bool = True) -> dict[str, Any]:
+               take_snapshot: bool = True,
+               auto_alerts: bool = True) -> dict[str, Any]:
     from ..sources import market
     sym = market.normalize(symbol)
     if not name:
@@ -217,7 +218,45 @@ def open_trade(symbol: str, entry_price: float, shares: float,
          json.dumps(snap, ensure_ascii=False),
          json.dumps(plan or {}, ensure_ascii=False)),
     )
-    return {"ok": True, "id": tid, "snapshot": snap}
+
+    # 把止损价/目标价变成真正的提醒。
+    #
+    # 在此之前交易计划和提醒是脱节的：你记录了「止损 23.60」，
+    # 但价格碰到 23.60 时系统不会告诉你 —— 计划只写在了纸上。
+    alerts: list[dict] = []
+    if auto_alerts:
+        alerts = _create_plan_alerts(tid, sym, name, s, t)
+    return {"ok": True, "id": tid, "snapshot": snap, "alerts": alerts}
+
+
+def _create_plan_alerts(trade_id: int, sym: str, name: str,
+                        stop: float | None, target: float | None) -> list[dict]:
+    """按交易计划建提醒。失败不影响开仓 —— 记录交易比提醒重要。"""
+    from . import alerts as alert_svc
+    made: list[dict] = []
+    if stop:
+        try:
+            aid = alert_svc.add_alert(
+                sym, "price_below", {"value": stop}, name=name,
+                message=f"【止损位】跌破 {stop} —— 按计划这里该离场，不要临场改主意",
+                cooldown=300,          # 止损要灵敏，冷却短一些
+                trade_id=trade_id,
+            )
+            made.append({"id": aid, "kind": "stop", "price": stop})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("创建止损提醒失败 %s: %s", sym, exc)
+    if target:
+        try:
+            aid = alert_svc.add_alert(
+                sym, "price_above", {"value": target}, name=name,
+                message=f"【目标位】触及 {target} —— 按计划可考虑分批止盈",
+                cooldown=1800,
+                trade_id=trade_id,
+            )
+            made.append({"id": aid, "kind": "target", "price": target})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("创建目标提醒失败 %s: %s", sym, exc)
+    return made
 
 
 def close_trade(trade_id: int, exit_price: float,
@@ -236,7 +275,14 @@ def close_trade(trade_id: int, exit_price: float,
         "note=CASE WHEN ?='' THEN note ELSE ? END WHERE id=?",
         (x, ed, note, note, trade_id),
     )
-    return {"ok": True, "id": trade_id}
+    # 平仓后按计划建的提醒就是死规则了，一并清掉
+    removed = 0
+    try:
+        from . import alerts as alert_svc
+        removed = alert_svc.delete_alerts_for_trade(trade_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("清理关联提醒失败 trade=%s: %s", trade_id, exc)
+    return {"ok": True, "id": trade_id, "alerts_removed": removed}
 
 
 def delete_trade(trade_id: int) -> dict[str, Any]:
@@ -250,8 +296,14 @@ def delete_trade(trade_id: int) -> dict[str, Any]:
     row = db.query_one("SELECT id FROM trades WHERE id=?", (trade_id,))
     if not row:
         return {"ok": False, "reason": "找不到该交易", "deleted": 0}
+    removed = 0
+    try:
+        from . import alerts as alert_svc
+        removed = alert_svc.delete_alerts_for_trade(trade_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("清理关联提醒失败 trade=%s: %s", trade_id, exc)
     db.execute("DELETE FROM trades WHERE id=?", (trade_id,))
-    return {"ok": True, "deleted": 1}
+    return {"ok": True, "deleted": 1, "alerts_removed": removed}
 
 
 def _hold_days(a: str | None, b: str | None) -> int | None:
@@ -317,7 +369,16 @@ def list_trades(status: str | None = None, limit: int = 200) -> list[dict]:
             quotes = market.get_quotes(list(dict.fromkeys(opens)))
         except Exception as exc:  # noqa: BLE001
             log.debug("持仓现价获取失败: %s", exc)
-    return [_enrich(r, quotes.get(r["symbol"])) for r in rows]
+    out = []
+    for r in rows:
+        item = _enrich(r, quotes.get(r["symbol"]))
+        try:
+            from . import alerts as alert_svc
+            item["alerts"] = alert_svc.list_alerts_for_trade(r["id"])
+        except Exception:  # noqa: BLE001
+            item["alerts"] = []
+        out.append(item)
+    return out
 
 
 def stats() -> dict[str, Any]:

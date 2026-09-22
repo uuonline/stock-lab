@@ -61,6 +61,7 @@ def add_alert(
     name: str = "",
     message: str = "",
     cooldown: int = 1800,
+    trade_id: int | None = None,
 ) -> int:
     sym = normalize(symbol)
     if rule_type not in RULE_TYPES:
@@ -88,9 +89,30 @@ def add_alert(
         except Exception:  # noqa: BLE001
             name = display_name(sym)
     return db.execute(
-        "INSERT INTO alerts(symbol,name,rule_type,params,message,cooldown) VALUES(?,?,?,?,?,?)",
-        (sym, name, rule_type, json.dumps(params, ensure_ascii=False), message, cooldown),
+        "INSERT INTO alerts(symbol,name,rule_type,params,message,cooldown,trade_id) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (sym, name, rule_type, json.dumps(params, ensure_ascii=False), message,
+         cooldown, trade_id),
     )
+
+
+def delete_alerts_for_trade(trade_id: int) -> int:
+    """删掉某笔交易自动创建的提醒。
+
+    交易结束后这些提醒就是"死规则"：价格早已远离，规则永远不会再触发，
+    留着只会让提醒列表越来越长、真规则被淹没。
+    """
+    rows = db.query("SELECT id FROM alerts WHERE trade_id=?", (trade_id,))
+    for r in rows:
+        db.execute("DELETE FROM alerts WHERE id=?", (r["id"],))
+        db.execute("DELETE FROM alert_events WHERE alert_id=?", (r["id"],))
+    return len(rows)
+
+
+def list_alerts_for_trade(trade_id: int) -> list[dict]:
+    return db.rows_to_dicts(db.query(
+        "SELECT id, rule_type, params, enabled, fired_count FROM alerts "
+        "WHERE trade_id=? ORDER BY id", (trade_id,)))
 
 
 def list_alerts(only_enabled: bool = False) -> list[dict]:

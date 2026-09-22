@@ -729,6 +729,7 @@ class TradeIn(BaseModel):
     note: str = ""
     entry_date: str | None = None
     name: str = ""
+    auto_alerts: bool = True     # 按止损/目标价自动建提醒
 
 
 class CloseIn(BaseModel):
@@ -785,6 +786,7 @@ def create_trade(body: TradeIn) -> dict:
         return trade_svc.open_trade(
             body.symbol, body.entry_price, body.shares, body.stop_price,
             body.target_price, body.reason, body.note, body.entry_date, body.name,
+            auto_alerts=body.auto_alerts,
         )
     except SymbolError as exc:
         raise HTTPException(400, str(exc)) from exc

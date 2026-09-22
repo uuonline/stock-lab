@@ -1470,7 +1470,7 @@ async function loadAlerts() {
       <thead><tr><th>标的</th><th>规则</th><th>备注</th><th>状态</th><th>冷却</th><th>已触发</th><th>操作</th></tr></thead>
       <tbody>${alerts.map(a => `<tr>
         <td>${esc(a.name)}<br><span class="muted" style="font-size:11.5px">${esc(a.symbol)}</span></td>
-        <td>${esc(a.rule_label)}</td>
+        <td>${esc(a.rule_label)}${a.trade_id ? ' <span class="up" title="由交易日志按止损/目标价自动创建，平仓时会一并删除">· 交易计划</span>' : ''}</td>
         <td>${esc(a.message || '—')}</td>
         <td>${a.enabled ? '<span class="up">启用</span>' : '<span class="muted">停用</span>'}</td>
         <td class="num">${a.cooldown}s</td>
@@ -2266,7 +2266,10 @@ function tradeRows(rows, isOpen) {
       <td class="num">${r.r_multiple === undefined || r.r_multiple === null ? '—' : r.r_multiple}</td>
       <td class="num">${r.hold_days === undefined || r.hold_days === null ? '—' : r.hold_days + ' 天'}</td>
       <td>${esc(r.reason || '—')}
-        <div class="muted" style="font-size:10px" title="${esc(snapTip)}">${esc(snapTip.slice(0, 26))}</div></td>
+        <div class="muted" style="font-size:10px" title="${esc(snapTip)}">${esc(snapTip.slice(0, 26))}</div>
+        ${(r.alerts || []).length ? `<div style="font-size:10px" class="up"
+          title="${esc((r.alerts || []).map(a => a.rule_type).join(', '))}">
+          🔔 已设 ${(r.alerts || []).length} 条提醒</div>` : ''}</td>
       <td>${isOpen
         ? `<button class="btn" data-close="${r.id}">平仓</button>`
         : `<button class="btn" data-del="${r.id}">删除</button>`}</td>

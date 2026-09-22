@@ -671,6 +671,16 @@ function bad(name, detail) {
         const after = await fetch(BASE + '/api/trades?status=open').then(r => r.json());
         const left = (after.rows || []).filter(r => (r.reason || '') === '自动化测试').length;
         left === 0 ? ok('测试数据已清理（不污染交易日志）') : bad('测试数据残留', String(left));
+
+        // 关联提醒也必须一起清掉，否则会留下指向已删除交易的死规则
+        const al = await fetch(BASE + '/api/alerts').then(r => r.json());
+        const orphan = (al.alerts || al.rows || []).filter(a => (a.message || '').includes('止损位')
+          && a.symbol === '002241.SZ' && a.trade_id);
+        const live = await fetch(BASE + '/api/trades?status=open').then(r => r.json());
+        const ids = new Set((live.rows || []).map(r => r.id));
+        const dangling = orphan.filter(a => !ids.has(a.trade_id));
+        dangling.length === 0 ? ok('关联提醒已随交易清理（无死规则）')
+                              : bad('残留死规则提醒', String(dangling.length));
       } catch (e) {
         bad('测试数据清理失败', e.message);
       }

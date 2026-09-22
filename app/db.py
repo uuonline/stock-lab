@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -13,6 +14,8 @@ from contextlib import contextmanager
 from typing import Any, Iterable, Iterator, Sequence
 
 from .config import settings
+
+log = logging.getLogger("stocklab.db")
 
 _local = threading.local()
 
@@ -89,6 +92,9 @@ CREATE TABLE IF NOT EXISTS alerts (
     cooldown    INTEGER NOT NULL DEFAULT 1800,  -- 秒
     last_fired  REAL NOT NULL DEFAULT 0,
     fired_count INTEGER NOT NULL DEFAULT 0,
+    -- 由交易日志自动创建的提醒会带上 trade_id，平仓时据此一并清理，
+    -- 否则会留下一堆指向已结束交易的"死规则"
+    trade_id    INTEGER,
     created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -208,7 +214,33 @@ def tx() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     conn = get_conn()
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """给已存在的库补新列。
+
+    CREATE TABLE IF NOT EXISTS 对已存在的表不会加列，所以升级时必须显式迁移 ——
+    否则 NAS 上的老库会缺列，插入时报错。
+    """
+    wanted = {
+        "alerts": {"trade_id": "INTEGER"},
+    }
+    for table, cols in wanted.items():
+        try:
+            have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        except sqlite3.Error:
+            continue
+        if not have:
+            continue
+        for col, typ in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+                log.info("迁移：%s 增加列 %s", table, col)
+    # 索引必须在补列**之后**建：老库执行 SCHEMA 时还没有 trade_id，
+    # 把 CREATE INDEX 写在 SCHEMA 里会直接报 no such column。
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_trade ON alerts(trade_id)")
 
 
 def query(sql: str, params: Sequence[Any] = ()) -> list[sqlite3.Row]:

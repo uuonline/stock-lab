@@ -225,7 +225,44 @@ check "平仓不存在的记录"      400 "$BASE/api/trades/999999/close" -X POS
 check "删除不存在的记录"      404 "$BASE/api/trades/999999" -X DELETE
 check "开仓标的非法被拒"      400 "$BASE/api/trades" -X POST \
       -H 'Content-Type: application/json' \
-      -d '{"symbol":"BOGUS","entry_price":10}' 
+      -d '{"symbol":"BOGUS","entry_price":10}'
+
+# 交易与提醒的联动：开仓自动建提醒、平仓自动清理（不能留死规则）
+TRADE_ALERT_TEST() {
+  local tid aid_before aid_after
+  aid_before=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d.get("alerts") or d.get("rows") or []))' 2>/dev/null || echo 0)
+  tid=$(curl -s -m 60 -X POST "$BASE/api/trades" -H 'Content-Type: application/json' \
+        -d '{"symbol":"002241.SZ","entry_price":24.64,"shares":100,"stop_price":23.60,"target_price":25.48,"reason":"联动自检"}' \
+        | python3 -c 'import json,sys;print(json.load(sys.stdin).get("id",""))' 2>/dev/null)
+  if [ -z "$tid" ]; then
+    printf "  \033[31m✗\033[0m %-38s 开仓失败\n" "开仓自动建提醒"
+    FAIL=$((FAIL+1)); return
+  fi
+  aid_after=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d.get("alerts") or d.get("rows") or []))' 2>/dev/null || echo 0)
+  if [ "$aid_after" -gt "$aid_before" ]; then
+    printf "  \033[32m✓\033[0m %-38s %s → %s 条\n" "开仓自动建提醒" "$aid_before" "$aid_after"
+    PASS=$((PASS+1))
+  else
+    printf "  \033[31m✗\033[0m %-38s %s → %s 条\n" "开仓自动建提醒" "$aid_before" "$aid_after"
+    FAIL=$((FAIL+1))
+  fi
+  curl -s -m 60 -X POST "$BASE/api/trades/$tid/close" -H 'Content-Type: application/json' \
+       -d '{"exit_price":24.90}' >/dev/null
+  local left
+  left=$(curl -s -m 30 "$BASE/api/alerts" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); rows=d.get('alerts') or d.get('rows') or []
+print(len([a for a in rows if a.get('trade_id') == $tid]))" 2>/dev/null || echo "?")
+  if [ "$left" = "0" ]; then
+    printf "  \033[32m✓\033[0m %-38s 0 条残留\n" "平仓清理关联提醒"
+    PASS=$((PASS+1))
+  else
+    printf "  \033[31m✗\033[0m %-38s 残留 %s 条\n" "平仓清理关联提醒" "$left"
+    FAIL=$((FAIL+1))
+  fi
+  curl -s -m 30 -X DELETE "$BASE/api/trades/$tid" >/dev/null
+}
+TRADE_ALERT_TEST
 check_has "数据包含提示词原文" \
   '请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。' \
   "$BASE/api/flow/002241.SZ/pack"
