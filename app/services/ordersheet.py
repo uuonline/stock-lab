@@ -48,6 +48,8 @@ def _f(v: Any) -> float | None:
 def build(include_watchlist: bool = True) -> dict[str, Any]:
     """生成下单参数清单。"""
     from ..sources import market
+    from . import trades as trade_svc
+    cash = (trade_svc.get_settings() or {}).get("available_cash")
 
     positions: list[dict] = []
     rows = db.rows_to_dicts(db.query(
@@ -67,10 +69,16 @@ def build(include_watchlist: bool = True) -> dict[str, Any]:
         stop = _f(r["stop_price"])
         tgt = _f(r["target_price"])
         shares = _f(r["shares"]) or 0
+        # 「可买股数」和券商 App 里那个「可买__股」是同一个口径：
+        # 可用资金 ÷ 委托价，向下取整到整手。让用户能直接比股数，
+        # 而不是拿金额去比股数（那样还得自己心算）。
+        afford = trade_svc.affordable_shares(e, cash)
         pos: dict[str, Any] = {
             "id": r["id"], "symbol": r["symbol"], "name": r["name"],
             "entry_price": e, "shares": shares,
             "last_price": cur,
+            "affordable_shares": afford,
+            "enough_cash": None if afford is None else (shares <= afford),
             "pnl_pct": round((cur / e - 1) * 100, 2) if (cur and e) else None,
             "stop": None, "target": None,
         }
@@ -119,6 +127,7 @@ def build(include_watchlist: bool = True) -> dict[str, Any]:
         "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "positions": positions,
         "watchlist": watch,
+        "available_cash": cash,
         "text": render_text(positions, watch),
         "disclaimer": ("本清单只把系统里已确定的参数重新排版，不做新计算。"
                        "系统不接券商接口，下单请在你自己的 App 里手动完成。"),
@@ -150,8 +159,13 @@ def render_text(positions: list[dict], watch: list[dict]) -> str:
             lines.append("  股票名称或代码    " + code)
             lines.append("  委托价            " + _px(p["entry_price"]) + "   （限价委托）")
             lines.append("  委托量            " + f"{int(p['shares'])} 股")
-            lines.append("  所需资金          " + f"{cost:,.0f} 元"
-                         + "   ← 和 App 里的「可买__股」对一下，不够就减量")
+            lines.append("  所需资金          " + f"{cost:,.0f} 元")
+            if p.get("affordable_shares") is not None:
+                ok = p.get("enough_cash")
+                lines.append("  App「可买」        " + f"{p['affordable_shares']} 股"
+                             + ("   ✓ 够" if ok else "   ✗ 不够，按这个数减量"))
+            else:
+                lines.append("  （在「交易」页填一次可用资金，这里会算出可买股数）")
             lines.append("  " + "-" * 40)
             lines.append("  【卖出下单 · 离场时照这个填】")
             if p.get("stop"):

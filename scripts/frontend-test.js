@@ -646,6 +646,20 @@ function bad(name, detail) {
       // 这笔盈亏比只有 0.81，必须给出警告而不是默默通过
       cr.includes('需要注意') ? ok('赔率不佳时给出警告') : bad('赔率警告缺失');
 
+      // 可用资金约束：仓位计算器按风险算股数，不知道账户有多少钱，
+      // 必须能和 App 的「可买__股」对账
+      $('#tcCash').value = '10000';
+      $('#tcCalcBtn').click();
+      await waitFor(() => $('#tcResult').textContent.includes('账户可买'), 20000)
+        ? ok('按可用资金算出「可买」股数') : bad('缺少可买股数');
+      const cr2 = $('#tcResult').textContent;
+      cr2.includes('400') ? ok('可买股数计算正确（1 万 ÷ 24.64 → 400 股）')
+                          : bad('可买股数不正确', cr2.slice(0, 90));
+      cr2.includes('不够') ? ok('买不起时明确标出不够') : bad('未标出资金不足');
+      // 砍到可买数之后实际风险变小，必须说明 —— 否则用户以为还是 2% 预算
+      cr2.includes('实际最大亏损') ? ok('说明减量后的实际风险') : bad('未说明实际风险变化');
+      $('#tcCash').value = '';
+
       // 开仓 → 持仓列表
       $('#tSymbol').value = '002241.SZ';
       $('#tEntry').value = '24.64';

@@ -746,6 +746,25 @@ class CalcIn(BaseModel):
     stop: float = Field(gt=0)
     target: float | None = Field(default=None, gt=0)
     max_position_pct: float = Field(default=30.0, gt=0, le=100)
+    available_cash: float | None = Field(default=None, ge=0)
+
+
+class SettingsIn(BaseModel):
+    available_cash: float | None = Field(default=None, ge=0)
+
+
+@router.get("/trades/settings")
+def trades_settings() -> dict:
+    return trade_svc.get_settings()
+
+
+@router.post("/trades/settings")
+def trades_settings_set(body: SettingsIn) -> dict:
+    """存可用资金 —— 用来算「可买多少股」，和券商 App 的口径一致。"""
+    r = trade_svc.set_settings(body.available_cash)
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("reason") or "参数无效")
+    return r
 
 
 @router.post("/trades/calc")
@@ -755,9 +774,13 @@ def trades_calc(body: CalcIn) -> dict:
     顺序很重要：先定单笔风险，再反推股数。
     先决定买多少再看能亏多少，几乎必然失控。
     """
+    # 未显式传可用资金时，用「交易」页存过的那个
+    cash = body.available_cash
+    if cash is None:
+        cash = (trade_svc.get_settings() or {}).get("available_cash")
     r = trade_svc.calc_position(
         body.capital, body.risk_pct, body.entry, body.stop,
-        body.target, body.max_position_pct,
+        body.target, body.max_position_pct, cash,
     )
     # 参数语义无效（比如止损高于入场价）属于客户端错误，应当 400，
     # 不能返回 200 + ok:false —— 那样调用方按状态码判断就会误以为成功。

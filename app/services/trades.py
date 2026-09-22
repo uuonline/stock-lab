@@ -31,6 +31,44 @@ from .. import db
 
 log = logging.getLogger("stocklab.trades")
 
+KV_CASH = "trades:available_cash"
+
+
+def get_settings() -> dict[str, Any]:
+    """账户层面的设置。目前只有可用资金一项。
+
+    为什么需要它：仓位计算器是按**风险**算股数的，它不知道账户里有多少钱。
+    算出来 600 股、结果 App 里「可买」只有 400 股 —— 这个断层必须补上，
+    否则清单给了参数、下单时才发现买不起。
+    """
+    v = db.kv_get(KV_CASH)
+    try:
+        cash = float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        cash = None
+    return {"available_cash": cash}
+
+
+def set_settings(available_cash: float | None) -> dict[str, Any]:
+    if available_cash is not None:
+        c = _f(available_cash)
+        if c is None or c < 0:
+            return {"ok": False, "reason": "可用资金必须是非负数"}
+        db.kv_set(KV_CASH, c)
+    return {"ok": True, **get_settings()}
+
+
+def affordable_shares(price: float | None, cash: float | None) -> int | None:
+    """按委托价算「可买多少股」——和券商 App 里的「可买__股」同一个口径。
+
+    A股买入必须是 100 股的整数倍（卖出可以零股，买入不行），所以向下取整到整手。
+    """
+    p, c = _f(price), _f(cash)
+    if not p or p <= 0 or c is None or c <= 0:
+        return None
+    return int(c // (p * 100)) * 100
+
+
 # 单笔风险的常规上限（占总资金比例）。超过就提示 —— 不是禁止，
 # 但要让人意识到自己在做一件偏离常规的事。
 RISK_WARN_PCT = 3.0
@@ -54,7 +92,8 @@ def _f(v: Any) -> float | None:
 
 def calc_position(capital: float, risk_pct: float, entry: float,
                   stop: float, target: float | None = None,
-                  max_position_pct: float = POSITION_WARN_PCT) -> dict[str, Any]:
+                  max_position_pct: float = POSITION_WARN_PCT,
+                  available_cash: float | None = None) -> dict[str, Any]:
     """由「能亏多少」反推「该买多少」。
 
     公式：股数 = 总资金 × 单笔风险% ÷ |入场价 − 止损价|
@@ -86,6 +125,24 @@ def calc_position(capital: float, risk_pct: float, entry: float,
         shares_rounded = 0
         warn.append("按这个止损距离，风险预算买不起一手（100 股），"
                     "要么放宽止损、要么增加风险预算、要么放弃这笔")
+    # 账户现金约束：按风险算出来的股数可能买不起。
+    # 这时**不是直接砍到可买数就算了** —— 砍了之后实际风险会变小，
+    # 但止损距离没变，仓位却不再是"风险预算对应的仓位"。
+    # 所以要把砍完之后的实际风险也告诉用户。
+    afford = affordable_shares(e, available_cash)
+    if afford is not None and shares_rounded > afford:
+        warn.append(
+            f"按风险算需要 {shares_rounded} 股（{shares_rounded * e:.0f} 元），"
+            f"但可用资金 {available_cash:.0f} 元只够买 {afford} 股 —— "
+            f"要么减少股数（实际风险会低于预算），要么补充资金"
+        )
+        if afford > 0:
+            warn.append(
+                f"若买 {afford} 股，实际最大亏损 "
+                f"{afford * per_share_risk:.0f} 元"
+                f"（占总资金 {afford * per_share_risk / cap * 100:.2f}%），"
+                f"低于你设定的 {rp:.2f}% 预算"
+            )
     cost = shares_rounded * e
     if cost > cap:
         warn.append(f"所需资金 {cost:.0f} 超过总资金 {cap:.0f}，不可行")
@@ -105,6 +162,8 @@ def calc_position(capital: float, risk_pct: float, entry: float,
         "cost": round(cost, 2),
         "position_pct": round(cost / cap * 100, 2) if cap else None,
         "max_loss": round(shares_rounded * per_share_risk, 2),
+        "affordable_shares": afford,
+        "available_cash": _f(available_cash),
         "warnings": warn,
     }
     t = _f(target)

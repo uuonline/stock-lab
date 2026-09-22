@@ -2219,6 +2219,11 @@ function renderCalc(r) {
       <div class="kv"><span class="k">单笔最大亏损</span><span class="v down">${r.max_loss} 元
         （风险预算 ${r.risk_amount} 元）</span></div>
       <div class="kv"><span class="k">止损距离</span><span class="v">${r.stop_distance_pct}%</span></div>
+      ${r.affordable_shares === null || r.affordable_shares === undefined ? '' :
+        `<div class="kv"><span class="k">账户可买</span><span class="v">
+          ${r.affordable_shares} 股（按 ${r.entry} 算，与 App 的「可买」同口径）
+          ${r.shares <= r.affordable_shares ? '<span class="up">✓ 够</span>'
+            : '<span class="down">✗ 不够</span>'}</span></div>`}
       ${r.rr !== undefined ? `<div class="kv"><span class="k">盈亏比</span><span class="v">
         <b>${r.rr}</b>（目标 ${r.target}，可赚 ${r.reward} 元 / +${r.target_gain_pct}%）</span></div>` : ''}
     </div>
@@ -2236,6 +2241,13 @@ async function doCalc() {
   };
   const t = Number($('#tcTarget').value);
   if (t) body.target = t;
+  // 可用资金：填了就顺手存下来，下次不用再填
+  const c = Number($('#tcCash').value);
+  if (c > 0) {
+    body.available_cash = c;
+    try { await api('/trades/settings', { method: 'POST', body: { available_cash: c } }); }
+    catch (e) { /* 存不上不影响本次计算 */ }
+  }
   try { renderCalc(await api('/trades/calc', { method: 'POST', body })); }
   catch (e) { renderCalc({ ok: false, reason: e.message }); }
 }
@@ -2332,6 +2344,11 @@ async function loadOrderSheet() {
 
 async function loadTrades() {
   try {
+    try {
+      const st = await api('/trades/settings');
+      const el = $('#tcCash');
+      if (el && !el.value && st.available_cash) el.value = st.available_cash;
+    } catch (e) { /* 忽略 */ }
     const [o, c, st] = await Promise.all([
       api('/trades?status=open'), api('/trades?status=closed'), api('/trades/stats'),
     ]);

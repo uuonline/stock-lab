@@ -228,6 +228,11 @@ check "开仓标的非法被拒"      400 "$BASE/api/trades" -X POST \
       -d '{"symbol":"BOGUS","entry_price":10}'
 
 # 交易与提醒的联动：开仓自动建提醒、平仓自动清理（不能留死规则）
+check "交易设置读取"          200 "$BASE/api/trades/settings"
+check "交易设置写入"          200 "$BASE/api/trades/settings" -X POST \
+      -H 'Content-Type: application/json' -d '{"available_cash":10000}'
+check "可用资金为负被拒"      422 "$BASE/api/trades/settings" -X POST \
+      -H 'Content-Type: application/json' -d '{"available_cash":-1}'
 check "下单清单"              200 "$BASE/api/order-sheet"
 check "下单清单不含自选"      200 "$BASE/api/order-sheet?watchlist=0"
 check "下单清单参数越界"      422 "$BASE/api/order-sheet?watchlist=9"
@@ -267,6 +272,11 @@ print(len([a for a in rows if a.get('trade_id') == $tid]))" 2>/dev/null || echo 
   fi
   curl -s -m 30 -X DELETE "$BASE/api/trades/$tid" >/dev/null
 }
+check "交易设置读取"          200 "$BASE/api/trades/settings"
+check "交易设置写入"          200 "$BASE/api/trades/settings" -X POST \
+      -H 'Content-Type: application/json' -d '{"available_cash":10000}'
+check "可用资金为负被拒"      422 "$BASE/api/trades/settings" -X POST \
+      -H 'Content-Type: application/json' -d '{"available_cash":-1}'
 check "下单清单"              200 "$BASE/api/order-sheet"
 check "下单清单不含自选"      200 "$BASE/api/order-sheet?watchlist=0"
 check "下单清单参数越界"      422 "$BASE/api/order-sheet?watchlist=9"
