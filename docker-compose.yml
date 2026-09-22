@@ -22,6 +22,13 @@ services:
     container_name: stocklab
     restart: unless-stopped
 
+    # 直接从 .env 读全部变量。
+    # 之前只有显式 environment 列表，导致「在 .env 里加了新配置却传不进容器」——
+    # 实测配群晖 Chat 时踩到：.env 有值，容器里读到的是空，排查了半天。
+    # 下面的 environment 会覆盖 env_file 里的同名项，所以原有默认值不受影响。
+    env_file:
+      - .env
+
     ports:
       # 左边是 NAS 上对外端口，冲突就改成 8788:8787
       - "${SL_HOST_PORT:-8787}:8787"
@@ -84,6 +91,9 @@ services:
       SL_NOTIFY_SERVERCHAN: ${SL_NOTIFY_SERVERCHAN:-}
       SL_NOTIFY_BARK: ${SL_NOTIFY_BARK:-}
       SL_NOTIFY_WEBHOOK: ${SL_NOTIFY_WEBHOOK:-}
+      # 群晖 Chat：频道 → 整合 → 传入 Webhook
+      SL_NOTIFY_SYNOLOGY_CHAT: ${SL_NOTIFY_SYNOLOGY_CHAT:-}
+      SL_NOTIFY_SYNOLOGY_VERIFY: "${SL_NOTIFY_SYNOLOGY_VERIFY:-0}"
 
       # ---- 回测默认成本 ----
       SL_COMMISSION: "${SL_COMMISSION:-0.00025}"

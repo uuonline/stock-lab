@@ -99,15 +99,50 @@ def send_synology_chat(content: str, title: str = "") -> bool:
     url = settings.notify_synology_chat
     if not url:
         return False
-    import json as _json
     text = f"{title}\n{content}" if title else content
-    ok = _post(url, verify=settings.notify_synology_verify,
-               data={"payload": _json.dumps({"text": text}, ensure_ascii=False)})
-    if not ok:
-        # 有些版本也接受直接 POST JSON，失败时再试一次
-        ok = _post(url, verify=settings.notify_synology_verify,
-                   json={"text": text})
-    return ok
+    return _post_synology(url, text, settings.notify_synology_verify)
+
+
+# 群晖 Chat 的限流提示。实测连续发帖会返回
+#   {"error":{"code":411,"errors":"create post too fast"}}
+# 这是**软限流**：等几秒再发就成功。如果不重试，
+# 多条提醒同时触发时后面的会被静默丢弃 —— 用户以为没触发，实际是没发出去。
+_SYNOLOGY_BUSY = ("create post too fast", '"code":411')
+
+
+def _post_synology(url: str, text: str, verify: bool,
+                   attempts: int = 4, first_wait: float = 3.0) -> bool:
+    import json as _json
+    import time as _time
+    payload = _json.dumps({"text": text}, ensure_ascii=False)
+    wait = first_wait
+    for i in range(attempts):
+        try:
+            with httpx.Client(timeout=TIMEOUT, trust_env=False, verify=verify) as c:
+                r = c.post(url, data={"payload": payload})
+                body = r.text or ""
+            if r.status_code < 400 and "success" in body and '"success":true' in body:
+                return True
+            if any(k in body for k in _SYNOLOGY_BUSY):
+                if i < attempts - 1:
+                    log.info("群晖 Chat 限流，%.0f 秒后重试（第 %d 次）", wait, i + 1)
+                    _time.sleep(wait)
+                    wait *= 1.8
+                    continue
+                log.warning("群晖 Chat 持续限流，放弃本次推送")
+                return False
+            # 非限流失败：试一次 JSON body（部分版本接受）
+            if i == 0:
+                with httpx.Client(timeout=TIMEOUT, trust_env=False, verify=verify) as c:
+                    r2 = c.post(url, json={"text": text})
+                if r2.status_code < 400 and '"success":true' in (r2.text or ""):
+                    return True
+            log.warning("群晖 Chat 推送失败 HTTP %s %s", r.status_code, body[:150])
+            return False
+        except Exception as exc:  # noqa: BLE001
+            log.warning("群晖 Chat 推送异常: %s", exc)
+            return False
+    return False
 
 
 CHANNELS = {
