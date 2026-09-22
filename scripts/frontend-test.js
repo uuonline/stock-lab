@@ -664,7 +664,28 @@ function bad(name, detail) {
       cr2.includes('按风险预算') ? ok('保留风险预算口径对照') : bad('缺少风险预算对照');
       $('#tcCash').value = '';
 
+      // 总资金必须持久化 —— 它是风险基数，不保存就会重置成默认值，
+      // 而默认值几乎肯定不等于用户的真实账户规模。实测过一次：
+      // 总资金默认 10 万而账户实际 1 万，算出的股数是正确值的 4 倍。
+      {
+        $('#tcCapital').value = '50000';
+        $('#tcCash').value = '20000';
+        $('#tcCalcBtn').click();
+        await sleep(2500);
+        const st = await fetch(BASE + '/api/trades/settings').then(r => r.json());
+        (st.capital === 50000 && st.available_cash === 20000)
+          ? ok('总资金与可用资金都已保存', `capital=${st.capital} cash=${st.available_cash}`)
+          : bad('设置未保存', JSON.stringify(st));
+        st.consistent === true ? ok('一致性检查通过') : bad('一致性检查异常');
+      }
+
       // 一键仓位方案：现价 → 止损位 → 股数
+      // 用 1 万账户 + 2% 风险验证：风险预算应为 200 元，
+      // ATR 止损（距离约 6.9%）只够 100 股 —— 而不是按 10 万基数算出的 400 股
+      await fetch(BASE + '/api/trades/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capital: 10000, available_cash: 10000 }),
+      });
       $('#planSymbol').value = '002241.SZ';
       $('#planBtn').click();
       await waitFor(() => ($('#planResult').textContent || '').includes('止损依据'), 90000)
@@ -678,6 +699,8 @@ function bad(name, detail) {
       // 止损位必须说明依据，不能只给一个数字
       /现价 − 2×ATR|支撑位|箱体下沿/.test(pl)
         ? ok('止损给出技术依据') : bad('止损缺少依据说明');
+      pl.includes('200') ? ok('风险预算按真实总资金算（1 万 × 2% = 200 元）')
+                         : bad('风险基数可能不对', pl.slice(0, 100));
 
       // 按现价的容量速查
       $('#capSymbol').value = '002241.SZ';

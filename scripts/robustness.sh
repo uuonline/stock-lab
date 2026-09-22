@@ -205,6 +205,12 @@ check_has "类比声明非预测"  '不是预测' "$BASE/api/analogs/002241.SZ"
 
 echo
 echo "── 交易日志与仓位计算 ──"
+# 前置：总资金是风险基数，没设时方案接口会（正确地）拒绝。
+# 先备份用户原有的设置，设成测试值，跑完再还原 ——
+# 绝不能把测试值留在用户库里（那会让后续所有风险计算都基于错误基数）。
+_ORIG_SETTINGS=$(curl -s -m 30 "$BASE/api/trades/settings" 2>/dev/null || echo '{}')
+curl -s -m 30 -X POST "$BASE/api/trades/settings" -H 'Content-Type: application/json' \
+     -d '{"capital":10000,"available_cash":10000}' >/dev/null
 check "持仓列表"              200 "$BASE/api/trades"
 check "复盘统计"              200 "$BASE/api/trades/stats"
 check "仓位计算"              200 "$BASE/api/trades/calc" -X POST \
@@ -302,6 +308,24 @@ TRADE_ALERT_TEST
 check_has "数据包含提示词原文" \
   '请用一句话概括这家公司的核心商业模式并列出它最主要的收入来源是什么。' \
   "$BASE/api/flow/002241.SZ/pack"
+
+# 还原用户原有设置
+python3 - "$_ORIG_SETTINGS" "$BASE" <<'RESTORE' 2>/dev/null || true
+import json, sys, urllib.request
+orig = json.loads(sys.argv[1] or "{}")
+base = sys.argv[2]
+body = {}
+if orig.get("capital"):
+    body["capital"] = orig["capital"]
+if orig.get("available_cash"):
+    body["available_cash"] = orig["available_cash"]
+# 原来没设过 → 用 clear 还原成"未填"状态，而不是留下测试值
+body["clear"] = not body
+req = urllib.request.Request(
+    base + "/api/trades/settings", method="POST",
+    data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+urllib.request.urlopen(req, timeout=15).read()
+RESTORE
 
 echo
 echo "══════════════════════════════════════════════════════"

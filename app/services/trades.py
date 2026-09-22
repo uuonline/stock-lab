@@ -32,29 +32,56 @@ from .. import db
 log = logging.getLogger("stocklab.trades")
 
 KV_CASH = "trades:available_cash"
+KV_CAPITAL = "trades:capital"
 
 
 def get_settings() -> dict[str, Any]:
-    """账户层面的设置。目前只有可用资金一项。
+    """账户层面的设置：可用资金 + 总资金。
 
-    为什么需要它：仓位计算器是按**风险**算股数的，它不知道账户里有多少钱。
-    算出来 600 股、结果 App 里「可买」只有 400 股 —— 这个断层必须补上，
-    否则清单给了参数、下单时才发现买不起。
+    **两个数都必须存，而且必须由用户明确填。**
+
+    实测踩过一个很危险的坑：总资金那栏默认 10 万且不保存，
+    用户只填了可用资金 1 万。于是风险预算按「10 万 × 2% = 2000 元」算，
+    得 400 股；而按他真实的 1 万账户，正确数字是「1 万 × 2% = 200 元」→ 100 股。
+    400 股对应的实际亏损是账户的 6.8%，是预算的 3.4 倍 ——
+    系统却报了「实际风险 0.68%」。**基数错了，后面全错。**
     """
-    v = db.kv_get(KV_CASH)
-    try:
-        cash = float(v) if v not in (None, "") else None
-    except (TypeError, ValueError):
-        cash = None
-    return {"available_cash": cash}
+    out: dict[str, Any] = {"available_cash": None, "capital": None}
+    for key, name in ((KV_CASH, "available_cash"), (KV_CAPITAL, "capital")):
+        v = db.kv_get(key)
+        try:
+            out[name] = float(v) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            out[name] = None
+    # 一致性检查：可用资金不可能超过总资金
+    c, cap = out["available_cash"], out["capital"]
+    out["consistent"] = not (c is not None and cap is not None and c > cap * 1.001)
+    if not out["consistent"]:
+        out["note"] = (f"可用资金（{c:.0f}）大于总资金（{cap:.0f}），"
+                       f"两者必有一个填错了 —— 风险基数错会导致股数错，请先核对")
+    return out
 
 
-def set_settings(available_cash: float | None) -> dict[str, Any]:
+def set_settings(available_cash: float | None = None,
+                 capital: float | None = None,
+                 clear: bool = False) -> dict[str, Any]:
+    """写设置。clear=True 时清空 —— 传 None 的语义是"不改这一项"，
+    所以需要一个显式的清除开关，否则没法把设置恢复成"未填"状态。
+    """
+    if clear:
+        db.kv_set(KV_CASH, None)
+        db.kv_set(KV_CAPITAL, None)
+        return {"ok": True, **get_settings()}
     if available_cash is not None:
         c = _f(available_cash)
         if c is None or c < 0:
             return {"ok": False, "reason": "可用资金必须是非负数"}
         db.kv_set(KV_CASH, c)
+    if capital is not None:
+        c = _f(capital)
+        if c is None or c <= 0:
+            return {"ok": False, "reason": "总资金必须是正数"}
+        db.kv_set(KV_CAPITAL, c)
     return {"ok": True, **get_settings()}
 
 
@@ -596,9 +623,13 @@ def plan(symbol: str, capital: float | None = None, risk_pct: float | None = Non
 
     sym = market.normalize(symbol)
     st = get_settings() or {}
-    cap = _f(capital) or _f(st.get("capital")) or 100000.0
+    cap = _f(capital) or _f(st.get("capital"))
     rp = _f(risk_pct) or 2.0
 
+    if not cap:
+        return {"ok": False,
+                "reason": ("还没有设置总资金 —— 风险预算是按总资金的百分比算的，"
+                           "没有它就算不出该买多少股。请在「交易」页填一次总资金。")}
     try:
         q = market.get_quote(sym) or {}
     except Exception as exc:  # noqa: BLE001

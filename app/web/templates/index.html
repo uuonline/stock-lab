@@ -288,7 +288,8 @@
         先决定买多少再看能亏多少，是大多数人亏大钱的起点。
       </p>
       <div class="form-grid mt">
-        <label>总资金 <input id="tcCapital" type="number" step="1000" value="100000"></label>
+        <label>总资金 <input id="tcCapital" type="number" step="1000"
+          placeholder="你的账户总规模，必填"></label>
         <label>单笔风险(%) <input id="tcRisk" type="number" step="0.5" value="2"></label>
         <label>入场价 <input id="tcEntry" type="number" step="0.01"></label>
         <label>止损价 <input id="tcStop" type="number" step="0.01"></label>
@@ -299,6 +300,7 @@
       <div class="row-actions mt">
         <button class="btn primary" id="tcCalcBtn">计算</button>
       </div>
+      <div id="tcConsistency" class="mt"></div>
       <div id="tcResult" class="mt"></div>
     </div>
 

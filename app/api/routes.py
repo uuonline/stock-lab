@@ -752,6 +752,8 @@ class CalcIn(BaseModel):
 
 class SettingsIn(BaseModel):
     available_cash: float | None = Field(default=None, ge=0)
+    capital: float | None = Field(default=None, gt=0)
+    clear: bool = False          # 清空设置（传 None 的语义是"不改这一项"）
     current_price: float | None = Field(default=None, gt=0)
 
 
@@ -763,7 +765,7 @@ def trades_settings() -> dict:
 @router.post("/trades/settings")
 def trades_settings_set(body: SettingsIn) -> dict:
     """存可用资金 —— 用来算「可买多少股」，和券商 App 的口径一致。"""
-    r = trade_svc.set_settings(body.available_cash)
+    r = trade_svc.set_settings(body.available_cash, body.capital, body.clear)
     if not r.get("ok"):
         raise HTTPException(400, r.get("reason") or "参数无效")
     return r

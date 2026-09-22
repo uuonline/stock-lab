@@ -2320,11 +2320,15 @@ async function doCalc() {
   };
   const t = Number($('#tcTarget').value);
   if (t) body.target = t;
-  // 可用资金：填了就顺手存下来，下次不用再填
+  // 总资金和可用资金都存下来 —— 总资金是风险基数，不保存的话刷新就重置成默认值，
+  // 而默认值几乎肯定不等于用户的真实账户规模。
   const c = Number($('#tcCash').value);
-  if (c > 0) {
-    body.available_cash = c;
-    try { await api('/trades/settings', { method: 'POST', body: { available_cash: c } }); }
+  const cap = Number($('#tcCapital').value);
+  const store = {};
+  if (c > 0) { body.available_cash = c; store.available_cash = c; }
+  if (cap > 0) store.capital = cap;
+  if (Object.keys(store).length) {
+    try { await api('/trades/settings', { method: 'POST', body: store }); }
     catch (e) { /* 存不上不影响本次计算 */ }
   }
   try { renderCalc(await api('/trades/calc', { method: 'POST', body })); }
@@ -2425,8 +2429,24 @@ async function loadTrades() {
   try {
     try {
       const st = await api('/trades/settings');
-      const el = $('#tcCash');
-      if (el && !el.value && st.available_cash) el.value = st.available_cash;
+      const ec = $('#tcCash'), ep = $('#tcCapital');
+      if (ec && !ec.value && st.available_cash) ec.value = st.available_cash;
+      if (ep && st.capital) ep.value = st.capital;
+      // 总资金和可用资金不一致时必须吵出来 —— 风险基数错会导致股数错，
+      // 实测有过：总资金默认 10 万没保存，用户账户其实只有 1 万，
+      // 结果算出的股数是正确值的 4 倍、实际风险是预算的 3.4 倍。
+      const warn = $('#tcConsistency');
+      if (warn) {
+        warn.innerHTML = st.consistent === false
+          ? `<div class="warn-box" style="border-color:var(--down)">
+               <b style="color:var(--down)">设置有问题</b><br>
+               <span style="font-size:12px">${esc(st.note || '')}</span></div>`
+          : (st.capital ? '' : `<div class="warn-box">
+               <b>请先填「总资金」</b><br>
+               <span style="font-size:12px">风险预算是按总资金的百分比算的，
+               没有它算出来的股数会差很多倍 —— 实测：总资金填 10 万而账户实际 1 万时，
+               算出的股数是正确值的 4 倍。</span></div>`);
+      }
     } catch (e) { /* 忽略 */ }
     const [o, c, st] = await Promise.all([
       api('/trades?status=open'), api('/trades?status=closed'), api('/trades/stats'),
