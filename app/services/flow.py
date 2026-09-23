@@ -1579,7 +1579,7 @@ def build(symbol: str) -> dict[str, Any]:
 
     if ctx["bars"]:
         try:
-            ctx["tech"] = ta.latest_snapshot(ctx["bars"])
+            ctx["tech"] = ta.latest_snapshot(ctx["bars"], None, ctx.get("quote"))
         except Exception as exc:  # noqa: BLE001
             log.warning("flow: 指标计算失败 %s: %s", sym, exc)
             ctx["tech"] = {}

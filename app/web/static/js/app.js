@@ -1997,7 +1997,15 @@ function renderAnomaly(d) {
       <div class="kv"><span class="k">波动率倍数</span><span class="v">
         ${det.z_score === null ? '—' : det.z_score} 倍（日常波动 ${det.daily_vol_pct}%）</span></div>
       <div class="kv"><span class="k">量比 / 振幅</span><span class="v">
-        ${det.vol_ratio === null ? '—' : det.vol_ratio} 倍 / ${det.amplitude === null ? '—' : det.amplitude + '%'}</span></div>
+        ${det.vol_ratio === null ? '—' : det.vol_ratio} 倍
+        ${det.vol_ratio_src ? `<span class="muted" style="font-size:11px">（${esc(det.vol_ratio_src)}）</span>` : ''}
+        / ${det.amplitude === null ? '—' : det.amplitude + '%'}</span></div>
+      ${det.vol_vs_day === undefined || det.vol_vs_day === null ? '' :
+        `<div class="kv"><span class="k">今日量 / 全日均量</span><span class="v">
+          ${(det.vol_vs_day * 100).toFixed(1)}%
+          <span class="muted" style="font-size:11px">（已交易 ${
+            Math.round((det.session_progress || 0) * 240)}/240 分钟，盘中天然是小数，别当量比看）</span>
+        </span></div>`}
       <div class="kv"><span class="k">触发条件</span><span class="v">
         ${(det.reasons || []).length ? esc(det.reasons.join('；')) : '无'}</span></div>
     </div>

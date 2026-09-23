@@ -334,10 +334,42 @@ def compute_all(bars: list[dict]) -> dict[str, Any]:
     return ind
 
 
+def _apply_live(bars: list[dict], live: dict[str, Any] | None) -> list[dict]:
+    """把实时行情并进最后一根 K线（仅当它是今天）。
+
+    不修改入参 —— 调用方可能还要用原始 bars。
+    """
+    if not live or not bars:
+        return bars
+    try:
+        import datetime as _dt
+        last = bars[-1]
+        if str(last.get("date"))[:10] != _dt.date.today().isoformat():
+            return bars
+        patched = dict(last)
+        changed = False
+        for src, dst in (("price", "close"), ("high", "high"),
+                         ("low", "low"), ("volume", "volume"), ("amount", "amount")):
+            v = live.get(src)
+            if v:
+                patched[dst] = v
+                changed = True
+        if not changed:
+            return bars
+        return bars[:-1] + [patched]
+    except Exception:  # noqa: BLE001
+        return bars
+
+
 def latest_snapshot(
-    bars: list[dict], ind: dict[str, Any] | None = None
+    bars: list[dict], ind: dict[str, Any] | None = None,
+    live: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """最后一根 K 线上的指标值与多空评分。
+
+    live: 实时行情。盘中数据库里的最后一根 K线是**过期的**（实测同一时刻
+          库里成交量 103,212、实时 179,625，差 43%），拿它算量比会系统性偏小。
+          传入 live 后，如果最后一根就是今天，就用实时值替换收盘/最高/最低/成交量。
 
     ind: 已经算好的 compute_all 结果，传入可省掉一次全量重算。
          实测 600 根 K线上 compute_all 要 347ms（NAS 的 J4125），
@@ -346,6 +378,7 @@ def latest_snapshot(
     """
     if not bars or len(bars) < 2:
         return {}
+    bars = _apply_live(bars, live)
     if ind is None:
         ind = compute_all(bars)
     n = len(bars)
@@ -425,13 +458,33 @@ def latest_snapshot(
             signals.append({"type": "bull", "text": "价格跌破布林下轨"}); score += 1
 
     # 量能
+    #
+    # ⚠️ 盘中必须做时间归一，否则「放量」信号在上午基本不会触发。
+    # 实测 09:36：今日量 / 5日均量 = 0.23，而标准量比是 4.97 ——
+    # 差的就是"已交易时间占比"（7/240）。不加这一步，阈值 2 的信号
+    # 要等到快收盘才可能出现。
+    #
+    # 历史 K线（回测）不受影响：那时最后一根是完整交易日，progress = 1。
+    vol_eff = vol
+    try:
+        import datetime as _dt
+        from .anomaly import session_progress as _sp
+        if bars and str(bars[-1].get("date"))[:10] == _dt.date.today().isoformat():
+            prog = _sp()
+            if 0 < prog < 1:
+                vol_eff = vol / prog
+    except Exception:  # noqa: BLE001
+        pass
+
     vol_ratio = None
     if vol_ma5:
-        vol_ratio = round(vol / vol_ma5, 2)
+        vol_ratio = round(vol_eff / vol_ma5, 2)
         if vol_ratio >= 2 and close is not None and prev_close is not None and close > prev_close:
-            signals.append({"type": "bull", "text": f"放量上涨(量比{vol_ratio})"}); score += 2
+            signals.append({"type": "bull",
+                            "text": f"放量上涨(量比 {vol_ratio}，已按交易时段归一)"}); score += 2
         elif vol_ratio >= 2 and close is not None and prev_close is not None and close < prev_close:
-            signals.append({"type": "bear", "text": f"放量下跌(量比{vol_ratio})"}); score -= 2
+            signals.append({"type": "bear",
+                            "text": f"放量下跌(量比 {vol_ratio}，已按交易时段归一)"}); score -= 2
 
     if score >= 5:
         rating = "强烈偏多"

@@ -9,6 +9,8 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from .. import db
+import re
+
 from ..config import settings
 from ..services import ai as ai_svc
 from ..services import alerts as alert_svc
@@ -131,6 +133,14 @@ def get_quote(symbol: str) -> dict:
     return q
 
 
+def ctx_quote(sym: str) -> dict:
+    """取实时行情，失败就返回空 —— 调用方按"没有实时数据"处理。"""
+    try:
+        return market.get_quote(sym) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 @router.get("/kline/{symbol}")
 def get_kline(
     symbol: str,
@@ -154,7 +164,8 @@ def get_kline(
         # 只算一次：latest_snapshot 复用同一份指标，别再重算一遍
         ind = ta.compute_all(bars)
         resp["indicators"] = ind
-        resp["snapshot"] = ta.latest_snapshot(bars, ind)
+        # 传入实时行情：盘中库里那根是过期的，不修正量比会偏小
+        resp["snapshot"] = ta.latest_snapshot(bars, ind, ctx_quote(sym))
         # 箱体分析随 K线一起返回，前端可直接画在图上
         try:
             q = market.get_quotes([sym]).get(sym) or {}
@@ -310,7 +321,7 @@ def get_indicators(symbol: str, limit: int = Query(260, ge=60, le=1000)) -> dict
         "symbol": sym,
         "name": (market.get_quotes([sym]).get(sym) or {}).get("name") or display_name(sym),
         "bars": len(bars),
-        "snapshot": ta.latest_snapshot(bars, ind),
+        "snapshot": ta.latest_snapshot(bars, ind, ctx_quote(sym)),
         "indicators": ind,
     }
 
@@ -961,14 +972,22 @@ async def chat_hook(request: Request) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"请求体解析失败: {exc}") from exc
 
-    provided = fields.get("token") or ""
-    expected = settings.chat_token
+    provided = (fields.get("token") or "").strip()
+    # 支持多个 token（逗号/空格分隔）。
+    # 群晖有两套机制、token 各不相同：
+    #   · 传出 Webhook —— 频道消息触发，用它的校验 token
+    #   · 机器人 Bot   —— 消息发给机器人触发，用它自己的 token
+    # 两个都可能打到这里，所以允许多个。留空则全部拒绝（fail closed）。
+    expected = {t.strip() for t in re.split(r"[,\s]+", settings.chat_token or "") if t.strip()}
     if not expected:
-        log.warning("群晖 Chat 传出 Webhook 被调用，但未配置 SL_CHAT_TOKEN，已拒绝")
+        log.warning("群晖 Chat 命令接口被调用，但未配置 SL_CHAT_TOKEN，已拒绝")
         raise HTTPException(403, "未配置 SL_CHAT_TOKEN，Chat 命令接口未启用")
-    if provided != expected:
-        log.warning("群晖 Chat 传出 Webhook token 不匹配，已拒绝（来自 %s）",
-                    request.client.host if request.client else "?")
+    if provided not in expected:
+        # 诊断信息只给长度和首尾各 1 位，不泄露完整 token
+        hint = (f"长度 {len(provided)}" + (f"、首字符 {provided[0]}…" if provided else "")
+                if provided else "空")
+        log.warning("群晖 Chat token 不匹配（收到：%s；已配置 %d 个），来自 %s",
+                    hint, len(expected), request.client.host if request.client else "?")
         raise HTTPException(403, "token 不匹配")
 
     text = fields.get("text") or ""

@@ -193,6 +193,32 @@ check_has "返回异动判定"    '"detect"' "$BASE/api/anomaly/002241.SZ"
 check_has "返回归因分层"    '"attribution"' "$BASE/api/anomaly/002241.SZ"
 check_has "返回状态与条件"  '"condition"' "$BASE/api/anomaly/002241.SZ"
 
+# 量比口径必须和行情接口一致。
+# 曾经异动模块自己算「今日量/20日均日量」且**没做时间归一**，
+# 上午得到 0.126 而真实量比 5.47 —— 放量阈值 1.5 永远达不到，异动会漏判。
+VOL_RATIO_TEST() {
+  local qv av
+  qv=$(curl -s -m 30 "$BASE/api/quote/002241.SZ" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); it=d.get('002241.SZ') or d
+print(it.get('vol_ratio') or '')" 2>/dev/null)
+  av=$(curl -s -m 60 "$BASE/api/anomaly/002241.SZ?news=0" | python3 -c "
+import json,sys
+print((json.load(sys.stdin).get('detect') or {}).get('vol_ratio') or '')" 2>/dev/null)
+  if [ -z "$qv" ] || [ -z "$av" ]; then
+    printf "  \033[33m○\033[0m %-38s 取不到（闭市或数据源无此字段）\n" "量比口径一致"
+    WARN=$((WARN+1)); return
+  fi
+  python3 -c "
+import sys
+q,a=float('$qv'),float('$av')
+r=max(q,a)/max(min(q,a),1e-9)
+sys.exit(0 if r < 1.6 else 1)" \
+    && { printf "  \033[32m✓\033[0m %-38s 行情 %s / 异动 %s\n" "量比口径一致" "$qv" "$av"; PASS=$((PASS+1)); } \
+    || { printf "  \033[31m✗\033[0m %-38s 行情 %s / 异动 %s（差太多）\n" "量比口径一致" "$qv" "$av"; FAIL=$((FAIL+1)); }
+}
+VOL_RATIO_TEST
+
 echo
 echo "── 推送渠道 ──"
 check "推送渠道列表"          200 "$BASE/api/alerts/test-notify" -X POST

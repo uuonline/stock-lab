@@ -48,7 +48,7 @@ def gather_context(symbol: str) -> dict[str, Any]:
     try:
         bars = market.get_kline(symbol, "day", 260)
         ctx["bars"] = bars
-        ctx["tech"] = ta.latest_snapshot(bars) if bars else {}
+        ctx["tech"] = ta.latest_snapshot(bars, None, ctx.get("quote")) if bars else {}
     except Exception as exc:  # noqa: BLE001
         ctx["bars"] = []
         ctx["tech"] = {}
@@ -61,6 +61,142 @@ def gather_context(symbol: str) -> dict[str, Any]:
         ctx["fund_error"] = str(exc)
 
     return ctx
+
+
+def _system_facts(ctx: dict[str, Any]) -> list[str]:
+    """把系统各处**已经算好**的结论汇总成几行，喂给模型。
+
+    每一项都容错：某个模块挂了就跳过那一行，不让整份报告失败。
+    这些结论都是代码按固定规则算的，可复现；模型只负责解释。
+    """
+    sym = ctx["symbol"]
+    q = ctx.get("quote") or {}
+    bars = ctx.get("bars") or []
+    out: list[str] = []
+
+    # 综合评分
+    try:
+        from . import panel as panel_svc
+        sc = panel_svc.composite_score(ctx)
+        if sc:
+            out.append(f"- 综合评分: {sc.get('score')} / 10（{sc.get('verdict')}）")
+            detail = sc.get("detail") or sc.get("parts") or {}
+            if isinstance(detail, dict) and detail:
+                out.append("  分项: " + "；".join(f"{k} {v}" for k, v in list(detail.items())[:5]))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("facts: 综合评分失败 %s", exc)
+
+    # PE 历史分位 + 代码给出的机制判定（最关键的一条）
+    try:
+        from . import flow as flow_svc
+        pe = flow_svc.pe_percentile(sym, q.get("pe_ttm"), ctx.get("fundamentals"))
+        if pe.get("ok"):
+            h = pe["history"]
+            out.append(f"- PE 五年分位: {pe['percentile']}%（{pe['band']}）"
+                       f"，区间 {h['min']}~{h['max']}，中位 {h['median']}，样本 {h['days']} 天")
+            if pe.get("price_percentile") is not None:
+                out.append(f"  价格分位: {pe['price_percentile']}%"
+                           f"（价格分位与估值分位之差 = {round(pe['percentile']-pe['price_percentile'],1)}）")
+            if pe.get("cross_note"):
+                out.append(f"  **系统判定**: {pe['cross_note']}")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("facts: PE 分位失败 %s", exc)
+
+    # 箱体
+    try:
+        from . import box as box_svc
+        bx = box_svc.adaptive(bars, q.get("price")) if bars else {}
+        a = bx.get("analysis") or {}
+        if a:
+            out.append(f"- 箱体（{bx.get('recommended_window')} 日窗口）: "
+                       f"{a['bottom']} ~ {a['top']}，高度 {a['height_pct']}%"
+                       f"，当前位置 {a['position_pct']}%（{a['zone']}）")
+            out.append(f"  形态: {a['shape']}，置信度 {a['confidence']}%"
+                       f"，触顶 {a['touch_top']} 次 / 触底 {a['touch_bottom']} 次"
+                       f"，箱内占比 {round((a.get('inside_ratio') or 0)*100)}%")
+            if bx.get("trustworthy") is False:
+                out.append(f"  **系统判定**: {bx.get('verdict')}")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("facts: 箱体失败 %s", exc)
+
+    # 支撑压力位
+    try:
+        from . import flow as flow_svc
+        sr = flow_svc.support_resistance(bars, q.get("price"), lookback=120)
+        if sr:
+            sup = "；".join(f"{s['price']}（触碰 {s['touches']} 次）" for s in sr["supports"])
+            res = "；".join(f"{r['price']}（触碰 {r['touches']} 次）" for r in sr["resistances"])
+            out.append(f"- 支撑位: {sup or '无'}    压力位: {res or '无'}")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("facts: 支撑压力失败 %s", exc)
+
+    # 资金流（趋势是代码按强度比判定的，不是模型看数）
+    try:
+        from ..sources import eastmoney as em
+        ff = em.fund_flow_any(sym, 20)
+        if ff:
+            mains = [x.get("main") or 0 for x in ff]
+            gross = sum(abs(v) for v in mains) or 1
+            strength = sum(mains) / gross
+            trend = ("持续净流入" if strength >= 0.15 else
+                     ("持续净流出" if strength <= -0.15 else "反复"))
+            out.append(f"- 资金流（{ff[-1].get('source')}）: {trend}"
+                       f"（强度 {strength:.2f}），近 20 日累计 {sum(mains)/1e8:+.2f} 亿"
+                       f"，净流入 {sum(1 for v in mains if v > 0)}/{len(mains)} 天")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("facts: 资金流失败 %s", exc)
+
+    # 异动归因的条件判定
+    try:
+        from . import anomaly as anom_svc
+        d = anom_svc.analyze(sym, with_news=False)
+        det, st, at = d.get("detect") or {}, d.get("state") or {}, d.get("attribution") or {}
+        if det.get("ok"):
+            out.append(f"- 异动: {det['level_name']}"
+                       f"（{det.get('z_score')} 倍日常波动，量比 {det.get('vol_ratio')}）；"
+                       f"大盘超额 {at.get('excess_vs_bench')}%，板块超额 {at.get('excess_vs_peers')}%")
+            cond = st.get("condition") or {}
+            if cond.get("title"):
+                out.append(f"  状态: {st.get('phase')} / {st.get('position_scope','')}{st.get('position')}"
+                           f" / {st.get('volume_price')}")
+                out.append(f"  **系统判定（条件组合）**: 【{cond['title']}】{cond.get('meaning','')}")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("facts: 异动失败 %s", exc)
+
+    # 历史类比
+    try:
+        from . import analogs as ag_svc
+        ag = ag_svc.analyze(sym, bars)
+        if ag.get("ok"):
+            h20 = (ag.get("horizons") or {}).get("20", {})
+            s20 = h20.get("signal") or {}
+            out.append(f"- 历史类比（{ag.get('tier')}匹配，{ag.get('events')} 次同类情形）: "
+                       f"20 日上涨占比 {s20.get('win_rate')}%，中位 {s20.get('median')}%，"
+                       f"最差 {s20.get('worst')}%，独立事件 {s20.get('independent')} 个")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("facts: 历史类比失败 %s", exc)
+
+    # 行业对比
+    try:
+        from ..sources import eastmoney_f10 as f10
+        if f10.available(sym):
+            ind = f10.industry(sym)
+            if ind.get("ok"):
+                avg, med = ind.get("avg") or {}, ind.get("median") or {}
+                sc = ind.get("scale") or {}
+                if avg:
+                    out.append(f"- 行业平均: PE {avg.get('pe_ttm') and round(avg['pe_ttm'],1)}"
+                               f"，PB {avg.get('pb') and round(avg['pb'],2)}")
+                if med:
+                    out.append(f"  行业中值: ROE {med.get('roe_avg')}%，净利率 {med.get('net_margin')}%")
+                if sc.get("market_cap_rank"):
+                    out.append(f"  行业排名: 市值第 {sc['market_cap_rank']:.0f}"
+                               f"，营收第 {sc.get('revenue_rank')}"
+                               f"，净利第 {sc.get('net_profit_rank')}")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("facts: 行业失败 %s", exc)
+
+    return out
 
 
 def build_prompt(ctx: dict[str, Any]) -> str:
@@ -130,12 +266,29 @@ def build_prompt(ctx: dict[str, Any]) -> str:
         for h in hist[-6:]:
             lines.append(f"{h['report_date']}: 营收 {_fmt(h.get('revenue'))}  净利 {_fmt(h.get('net_profit'))}  ROE {_fmt(h.get('roe'))}%")
 
+    # ---- 系统已算出的结论 ----
+    #
+    # 这一段是整个提示词里最重要的部分。
+    # 之前只给原始数字，模型得自己从 PE / EPS / 利润率里推导出「是不是假便宜」
+    # 这种机制判断 —— 而实测本地 7B/12.6G 模型在这一点上会给出**互相矛盾且错误**
+    # 的结论（一个说"股价高估"、一个说"业绩下滑"、一个说"真便宜"）。
+    # 而这些判断系统里本来就由代码算好了（规则明确、可复现）。
+    # 所以改成：**代码给结论，模型负责解释和补充** —— 它没有编数字的空间，
+    # 也不会把盈利高增误读成利空。
+    facts = _system_facts(ctx)
+    if facts:
+        lines.append("")
+        lines.append("# 系统已算出的结论（**不要重新推导，请在此基础上解释、补充和挑错**）")
+        lines.extend(facts)
+
     body = "\n".join(lines)
     return (
-        "你是一位严谨的 A股/港股 证券分析师。请基于下面提供的**真实数据**，"
-        "撰写一份中文个股研究报告。\n\n"
+        "你是一位严谨的 A股/港股 证券分析师。下面给你两部分内容："
+        "**系统用代码算出的结论** 和 **支撑这些结论的原始数据**。\n\n"
         "要求：\n"
         "1. 严格基于给定数据，不要编造任何未提供的数字或消息面事件。\n"
+        "2. 「系统已算出的结论」是代码按固定规则得出的，**请直接采信并展开解释**，"
+        "不要推翻它另起炉灶；如果你认为它有问题，请明确指出哪一条、为什么。\n"
         "2. 数据缺失时明确写「数据缺失」，不要臆测。\n"
         "3. 结构如下（用 Markdown）：\n"
         "   ## 一句话结论\n"

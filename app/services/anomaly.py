@@ -58,6 +58,34 @@ def _f(v: Any) -> float | None:
         return None
 
 
+# A股交易时段（分钟）：09:30-11:30 + 13:00-15:00，共 240 分钟
+_SESSIONS = (((9, 30), (11, 30)), ((13, 0), (15, 0)))
+_TOTAL_MIN = 240
+
+
+def session_progress(now: dt.datetime | None = None) -> float:
+    """当日已交易时间占全天的比例（0~1）。
+
+    量比必须做这个归一：标准定义是
+        量比 = 当日累计量 ÷ 已交易时间占比 ÷ 过去5日平均日量
+    不归一的话，上午 9:36 算出来的数天然只有真实量比的 1/40 ——
+    于是"放量"永远检测不出来（实测：真实量比 5.47 时算出来只有 0.126）。
+    """
+    n = now or dt.datetime.now()
+    if n.weekday() >= 5:
+        return 1.0                      # 非交易日按全天算，避免除零
+    mins = 0.0
+    for (h1, m1), (h2, m2) in _SESSIONS:
+        start, end = h1 * 60 + m1, h2 * 60 + m2
+        cur = n.hour * 60 + n.minute + n.second / 60.0
+        if cur >= end:
+            mins += end - start
+        elif cur > start:
+            mins += cur - start
+    # 盘前给一个下限，避免刚开盘就除以接近 0 得到天文数字
+    return max(1 / _TOTAL_MIN, min(1.0, mins / _TOTAL_MIN))
+
+
 def _std(xs: list[float]) -> float:
     if len(xs) < 2:
         return 0.0
@@ -106,11 +134,33 @@ def detect(bars: list[dict], quote: dict) -> dict[str, Any]:
         pct = (closes[-1] / closes[-2] - 1) * 100
     z = pct / sd if pct is not None else None
 
-    vol_ratio = None
-    if len(vols) >= 21 and vols[-1]:
-        avg20 = sum(vols[-21:-1]) / 20
-        if avg20 > 0:
-            vol_ratio = vols[-1] / avg20
+    # ---- 成交量 / 量比 ----
+    #
+    # 这里修过两个错，都是"看着正常但数值错一个量级"的那种：
+    #
+    # 错 1：没做时间归一。标准量比要除以"已交易时间占比"，
+    #       不归一的话上午算出来的数天然只有真实量比的 1/40
+    #       （实测 09:36：真实 5.47，这里算出 0.126），
+    #       于是 VOL_MILD=1.5 的放量阈值上午永远达不到 —— 异动漏判。
+    #
+    # 错 2：today 用的是数据库里最后一根 K线。盘中那根是**过期的**
+    #       （实测接口 179,625 vs 库里 103,212），拿它当"今日量"必然偏小。
+    #       所以优先用行情接口的实时成交量。
+    avg20 = sum(vols[-21:-1]) / 20 if len(vols) >= 21 else 0
+    avg5 = sum(vols[-6:-1]) / 5 if len(vols) >= 6 else avg20
+    today_vol = _f(quote.get("volume")) or vols[-1]
+    progress = session_progress()
+
+    # 标准定义优先用行情接口给的（和用户券商 App 上看到的一致，也做了时间归一）
+    vol_ratio = _f(quote.get("vol_ratio"))
+    vol_ratio_src = "行情接口"
+    if vol_ratio is None and avg5 > 0:
+        vol_ratio = today_vol / max(progress, 1e-6) / avg5
+        vol_ratio_src = "本地推算（已时间归一）"
+
+    # 保留原始口径但**换个名字**：它衡量的是"今日量占全日均量的比例"，
+    # 盘中天然是个小数，不能当量比看。名字不改的话下次还会有人用错。
+    vol_vs_day = (today_vol / avg20) if avg20 > 0 else None
 
     prev_close = _f(quote.get("prev_close")) or (closes[-2] if len(closes) > 1 else None)
     amplitude = None
@@ -146,7 +196,9 @@ def detect(bars: list[dict], quote: dict) -> dict[str, Any]:
     if z is not None and abs(z) >= Z_MILD:
         reasons.append(f"涨跌幅 {pct:+.2f}% 是其日常波动（{sd:.2f}%）的 {abs(z):.1f} 倍")
     if vol_ratio and vol_ratio >= VOL_MILD:
-        reasons.append(f"成交量为近 20 日均量的 {vol_ratio:.2f} 倍")
+        reasons.append(f"量比 {vol_ratio:.2f}（{vol_ratio_src}，标准口径已做时间归一）"
+                       f"，今日成交量为全日均量的 {vol_vs_day:.0%}"
+                       if vol_vs_day is not None else f"量比 {vol_ratio:.2f}")
     if amplitude and amplitude >= 2 * max(sd, 0.5) * 1.5:
         reasons.append(f"振幅 {amplitude:.2f}%（日常波动 {sd:.2f}%）")
     if new_high:
@@ -162,6 +214,9 @@ def detect(bars: list[dict], quote: dict) -> dict[str, Any]:
         "z_score": None if z is None else round(z, 2),
         "daily_vol_pct": round(sd, 2),
         "vol_ratio": None if vol_ratio is None else round(vol_ratio, 2),
+        "vol_ratio_src": vol_ratio_src if vol_ratio is not None else None,
+        "vol_vs_day": None if vol_vs_day is None else round(vol_vs_day, 3),
+        "session_progress": round(progress, 4),
         "amplitude": None if amplitude is None else round(amplitude, 2),
         "gap": None if gap is None else round(gap, 2),
         "new_high_60": new_high,
@@ -520,7 +575,7 @@ def analyze(symbol: str, with_news: bool = True) -> dict[str, Any]:
     try:
         bars = market.get_kline(sym, "day", 300)
         from . import indicators as ta
-        tech = ta.latest_snapshot(bars) if bars else {}
+        tech = ta.latest_snapshot(bars, None, quote) if bars else {}
     except Exception as exc:  # noqa: BLE001
         log.warning("anomaly: K线失败 %s: %s", sym, exc)
 

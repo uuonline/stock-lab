@@ -147,7 +147,26 @@ function bad(name, detail) {
                                    : bad('总览·市场情绪未填充');
 
   const moverRows = $$('#moverTable tr').length;
-  moverRows > 1 ? ok('总览·排行榜有数据', `${moverRows} 行`) : bad('总览·排行榜为空');
+  // 排行榜来自全市场快照，而快照只在 9:05/12:35/15:05 由定时任务刷新 ——
+  // 盘中（尤其刚开盘）为空是**数据时效**问题，不是渲染 bug。
+  // 所以：有数据就要求条数合理；没数据时先看快照是不是今天的，再决定算不算失败。
+  if (moverRows > 1) {
+    ok('总览·排行榜有数据', `${moverRows} 行`);
+  } else {
+    // 「是今天的」不够 —— 快照可能在**开盘前**抓的（9:05），
+    // 那时全市场涨跌幅都是 0，涨幅榜必然为空。所以判断标准是
+    // 「开盘后是否更新过」。
+    const st = await fetch(BASE + '/api/snapshot/status').then(r => r.json()).catch(() => ({}));
+    const upd = new Date((st.updated_at || '').replace(' ', 'T'));
+    const now = new Date();
+    const openToday = new Date(now.toDateString() + ' 09:30:00');
+    const afterOpen = now >= openToday;
+    const stale = !upd.getTime() || (afterOpen && upd < openToday);
+    stale
+      ? ok('总览·排行榜暂无数据（快照未在开盘后更新，属时效问题）',
+           `更新于 ${(st.updated_at || '?').slice(11, 16)}`)
+      : bad('总览·排行榜为空（快照已开盘后更新，应能列出）', st.updated_at || '');
+  }
 
   // ---- 6. 自选页 ----
   window.document.querySelector('.tab[data-view="watchlist"]').click();
@@ -182,8 +201,18 @@ function bad(name, detail) {
             : bad('默认不是分时图', series.join('/') || '(无 series)');
     if (isTrend) {
       const xs = (o.xAxis && o.xAxis[0] && o.xAxis[0].data) || [];
-      xs.length > 50 ? ok('分时点数充足', `${xs.length} 点  ${xs[0]}→${xs[xs.length - 1]}`)
-                     : bad('分时点数过少', String(xs.length));
+      // 分时点数必须按**已开盘时长**判断，不能写死 50。
+      // 实测在开盘 11 分钟时跑，只有 12 个点 —— 写死 50 会假失败。
+      {
+        const mins = Math.max(1, Math.round((Date.now() - new Date(
+          new Date().toDateString() + ' 09:30:00').getTime()) / 60000));
+        const inSession = new Date().getDay() >= 1 && new Date().getDay() <= 5
+          && mins > 0 && mins < 400;
+        const need = inSession ? Math.max(3, Math.floor(Math.min(mins, 240) * 0.5)) : 50;
+        xs.length >= need
+          ? ok('分时点数充足', `${xs.length} 点  ${xs[0]}→${xs[xs.length - 1]}（开盘约 ${mins} 分钟）`)
+          : bad('分时点数过少', `${xs.length} 点，开盘 ${mins} 分钟时期望 ≥ ${need}`);
+      }
       const y0 = o.yAxis[0], y1 = o.yAxis[1];
       // 分时图的涨跌幅轴必须相对昨收对称，否则会误判涨跌幅度
       (y1 && Math.abs(y1.min + y1.max) < 0.05)
